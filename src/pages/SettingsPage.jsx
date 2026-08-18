@@ -62,7 +62,7 @@ export function SettingsPage({ notify }) {
       label: 'Role',
       sortable: true,
       render: (row) => (
-        <Badge tone={row.role === 'Super Admin' ? 'brand' : 'neutral'}>{row.role}</Badge>
+        <Badge tone={row.role === 'Admin' ? 'brand' : 'neutral'}>{row.role}</Badge>
       ),
     },
     { key: 'lastActive', label: 'Last active', sortable: true },

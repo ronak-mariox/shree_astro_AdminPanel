@@ -43,16 +43,6 @@ export const kpis = [
   },
 ];
 
-export const revenueTrend = [
-  { label: 'Feb', value: 620000 },
-  { label: 'Mar', value: 748000 },
-  { label: 'Apr', value: 812000 },
-  { label: 'May', value: 1010000 },
-  { label: 'Jun', value: 1184000 },
-  { label: 'Jul', value: 1462000 },
-  { label: 'Aug', value: 1840000 },
-];
-
 export const consultationMix = [
   { label: 'Mon', chat: 620, call: 310 },
   { label: 'Tue', chat: 704, call: 366 },
@@ -184,22 +174,13 @@ export const activityTrend = [
   { label: 'Sun', value: 10240 },
 ];
 
-export const retention = [
-  { label: 'Day 1', value: 68 },
-  { label: 'Day 7', value: 42 },
-  { label: 'Day 14', value: 31 },
-  { label: 'Day 30', value: 24 },
-  { label: 'Day 60', value: 19 },
-  { label: 'Day 90', value: 16 },
-];
-
 /** Admin accounts and platform-wide switches on the settings page. */
 export const adminTeam = [
   {
     id: 'ad-1',
     name: 'Vaibhav Mehra',
     email: 'admin@shreeastro.com',
-    role: 'Super Admin',
+    role: 'Admin',
     lastActive: 'Online now',
     status: 'active',
   },
@@ -230,8 +211,7 @@ export const adminTeam = [
 ];
 
 export const rolePermissions = [
-  { role: 'Super Admin', scope: 'Everything, including admin accounts and payouts' },
-  { role: 'Content Manager', scope: 'Content library — create, publish and archive' },
-  { role: 'Finance', scope: 'Payments, wallets, payouts, reconciliation reports' },
-  { role: 'Support Lead', scope: 'Users, consultations — read and moderate' },
+  { role: 'Admin', scope: 'Everything, including admin accounts and payouts' },
+  { role: 'Consultation', scope: 'Consultation related actions' },
+  { role: 'user', scope: 'Users related actions' },
 ];

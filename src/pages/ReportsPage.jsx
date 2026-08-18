@@ -14,7 +14,6 @@ import {
   Card,
   DetailList,
   Note,
-  Progress,
   StatCard,
   StatusBadge,
   Tabs,
@@ -22,8 +21,6 @@ import {
 import {
   activityTrend,
   consultationMix,
-  retention,
-  revenueTrend,
   savedReports,
   signupSplit,
   systemHealth,
@@ -118,7 +115,7 @@ export function ReportsPage({ notify }) {
         <StatCard label="Crash-free sessions" value="99.7%" icon="shield" delta="+0.1 pts" hint="both apps" />
       </div>
 
-      <div className="grid grid--sidebar" style={{ marginBottom: 16 }}>
+      <div style={{ marginBottom: 16 }}>
         <Card title="User activity" subtitle="Sessions per day across both apps">
           <AreaChart
             data={activityTrend}
@@ -128,30 +125,9 @@ export function ReportsPage({ notify }) {
             valueFormat={(value) => `${(value / 1000).toFixed(0)}k`}
           />
         </Card>
-
-        <Card title="Retention" subtitle="Share of users returning after install">
-          <div className="stack" style={{ gap: 12 }}>
-            {retention.map((row) => (
-              <div key={row.label}>
-                <div className="row row--between" style={{ marginBottom: 5 }}>
-                  <span style={{ fontSize: 12.5 }}>{row.label}</span>
-                  <span className="mono strong">{row.value}%</span>
-                </div>
-                <Progress value={row.value} />
-              </div>
-            ))}
-          </div>
-        </Card>
       </div>
 
-      <div className="grid grid--3" style={{ marginBottom: 16 }}>
-        <Card title="Revenue" subtitle="Monthly, net of fees">
-          <AreaChart
-            data={revenueTrend}
-            height={170}
-            valueFormat={(value) => `₹${(value / 100000).toFixed(1)}L`}
-          />
-        </Card>
+      <div className="grid grid--2" style={{ marginBottom: 16 }}>
         <Card title="Consultation volume" subtitle="Chat vs. voice, this week">
           <BarChart data={consultationMix} stacked={['chat', 'call']} height={170} />
         </Card>

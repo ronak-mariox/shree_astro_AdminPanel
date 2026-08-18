@@ -57,5 +57,5 @@ export const routeTitles = {
 export const admin = {
   name: 'Vaibhav Mehra',
   email: 'admin@shreeastro.com',
-  role: 'Super Admin',
+  role: 'Admin',
 };

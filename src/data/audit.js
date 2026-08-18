@@ -20,7 +20,7 @@ export const auditLogs = [
   {
     id: 'log-2291',
     admin: 'Vaibhav Mehra',
-    role: 'Super Admin',
+    role: 'Admin',
     action: 'Approved astrologer application',
     target: 'a-204 · Acharya Vikram Joshi',
     area: 'Astrologers',
@@ -75,7 +75,7 @@ export const auditLogs = [
   {
     id: 'log-2286',
     admin: 'Vaibhav Mehra',
-    role: 'Super Admin',
+    role: 'Admin',
     action: 'Changed platform commission to 70%',
     target: 'Settings · Commission',
     area: 'Settings',
@@ -108,7 +108,7 @@ export const auditLogs = [
   {
     id: 'log-2283',
     admin: 'Vaibhav Mehra',
-    role: 'Super Admin',
+    role: 'Admin',
     action: 'Suspended astrologer',
     target: 'a-208 · Pandit Om Prakash',
     area: 'Astrologers',
@@ -141,7 +141,7 @@ export const auditLogs = [
   {
     id: 'log-2280',
     admin: 'Vaibhav Mehra',
-    role: 'Super Admin',
+    role: 'Admin',
     action: 'Invited admin account',
     target: 'sara@shreeastro.com · Support Lead',
     area: 'Settings',
@@ -163,7 +163,7 @@ export const auditLogs = [
   {
     id: 'log-2278',
     admin: 'Vaibhav Mehra',
-    role: 'Super Admin',
+    role: 'Admin',
     action: 'Rejected astrologer application',
     target: 'a-212 · Mohan Tiwari',
     area: 'Astrologers',
