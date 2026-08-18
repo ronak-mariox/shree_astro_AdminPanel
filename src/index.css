@@ -1,0 +1,13 @@
+/**
+ * Shree Astro admin panel — stylesheet entry.
+ *
+ * Order matters: tokens define the variables everything else reads, base
+ * resets the document, then the shell, the reusable pieces and finally the
+ * page-specific composition.
+ */
+
+@import './styles/tokens.css';
+@import './styles/base.css';
+@import './styles/layout.css';
+@import './styles/components.css';
+@import './styles/pages.css';

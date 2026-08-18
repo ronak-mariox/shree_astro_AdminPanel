@@ -1,0 +1,165 @@
+/**
+ * Design tokens for the Shree Astro admin panel.
+ *
+ * Values mirror the mobile themes (user_app/src/theme, astro_app/src/theme) so
+ * the three surfaces read as one product: the warm canvas, the brand yellow,
+ * the orange CTA ramp and the grey ink scale are all carried over verbatim.
+ * Tokens that only exist on the web — the ink sidebar, table rows, focus rings
+ * — are derived from those same values.
+ */
+
+@font-face {
+  font-family: 'Poppins';
+  src: url('../assets/fonts/Poppins-Regular.ttf') format('truetype');
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Poppins';
+  src: url('../assets/fonts/Poppins-Medium.ttf') format('truetype');
+  font-weight: 500;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Poppins';
+  src: url('../assets/fonts/Poppins-SemiBold.ttf') format('truetype');
+  font-weight: 600;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Poppins';
+  src: url('../assets/fonts/Poppins-Bold.ttf') format('truetype');
+  font-weight: 700;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Inter';
+  src: url('../assets/fonts/Inter-Regular.ttf') format('truetype');
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Inter';
+  src: url('../assets/fonts/Inter-Medium.ttf') format('truetype');
+  font-weight: 500;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Inter';
+  src: url('../assets/fonts/Inter-SemiBold.ttf') format('truetype');
+  font-weight: 600;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Inter';
+  src: url('../assets/fonts/Inter-Bold.ttf') format('truetype');
+  font-weight: 700;
+  font-display: swap;
+}
+
+:root {
+  /* — Brand ————————————————————————————————— */
+  --brand-yellow: #f0df20;
+  --brand-yellow-soft: #fbed54;
+  --grad-from: #f55102;
+  --grad-to: #ffbc01;
+  --gradient: linear-gradient(261.86deg, #f55102 0%, #ffbc01 100%);
+  --gradient-warm: linear-gradient(135deg, #ffbf00 0%, #ff4e00 100%);
+  --glow: rgba(255, 78, 0, 0.3);
+
+  /* — Canvas & surfaces ————————————————————— */
+  --canvas: #faf9f7;
+  --canvas-warm: #fffdf8;
+  --surface: #ffffff;
+  --surface-inset: #f8f7f4;
+  --surface-muted: #f3f4f6;
+  --surface-subtle: #f9fafb;
+  --surface-recessed: #f8f8f8;
+
+  /* Ink sidebar — the warm near-black the apps use for filled CTAs. */
+  --ink: #131110;
+  --ink-raised: #1d1a18;
+  --ink-border: rgba(255, 255, 255, 0.08);
+  --ink-text: rgba(255, 255, 255, 0.62);
+  --ink-text-strong: #ffffff;
+  --ink-text-muted: rgba(255, 255, 255, 0.38);
+
+  /* — Text ——————————————————————————————— */
+  --text: #1f2937;
+  --text-secondary: #6b7280;
+  --text-muted: #9ca3af;
+  --text-faint: #c4c4c4;
+  --text-inverse: #ffffff;
+  --text-on-yellow: #030300;
+
+  /* — Borders ———————————————————————————— */
+  --border: #e5e7eb;
+  --border-card: #f0f0f0;
+  --border-row: #f3f4f6;
+  --border-strong: rgba(0, 0, 0, 0.17);
+  --border-active: #f0df20;
+
+  /* — Status ————————————————————————————— */
+  --success: #16a34a;
+  --success-strong: #04963a;
+  --success-tint: #f0fdf4;
+  --success-border: rgba(134, 239, 172, 0.6);
+  --warning: #b45309;
+  --warning-tint: #fffbeb;
+  --warning-border: rgba(252, 211, 77, 0.5);
+  --danger: #dc2626;
+  --danger-tint: #fef2f2;
+  --danger-border: rgba(254, 202, 202, 0.9);
+  --info: #b25c00;
+  --info-tint: #fff4e0;
+  --info-border: rgba(255, 140, 0, 0.25);
+  --neutral-tint: #f3f4f6;
+  --neutral-border: #e5e7eb;
+  --lilac-tint: #ede7f6;
+  --lilac: #5b3fa8;
+  --debit: #ef4444;
+  --debit-tint: #fee2e2;
+
+  /* — Type ——————————————————————————————— */
+  --font-display: 'Poppins', system-ui, sans-serif;
+  --font-ui: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+
+  /* — Radius (from user_app/src/theme/layout.ts) ——— */
+  --r-chip: 6px;
+  --r-tag: 8px;
+  --r-button: 10px;
+  --r-field: 12px;
+  --r-tile: 15px;
+  --r-input: 16px;
+  --r-card: 20px;
+  --r-panel: 22px;
+  --r-balance: 24px;
+  --r-pill: 999px;
+
+  /* — Spacing (4pt rhythm) ———————————————— */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 20px;
+  --s-6: 24px;
+  --s-7: 28px;
+  --s-8: 32px;
+  --s-10: 40px;
+
+  /* — Elevation ————————————————————————— */
+  --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.05);
+  --shadow-card: 0 1px 3px rgba(16, 24, 40, 0.06), 0 8px 24px rgba(16, 24, 40, 0.04);
+  --shadow-raised: 0 8px 20px rgba(16, 24, 40, 0.08), 0 2px 6px rgba(16, 24, 40, 0.04);
+  --shadow-pop: 0 18px 40px rgba(16, 24, 40, 0.16);
+  --shadow-brand: 0 8px 20px rgba(255, 78, 0, 0.24);
+
+  /* — Shell metrics ————————————————————— */
+  --sidebar-w: 254px;
+  --sidebar-w-collapsed: 76px;
+  --topbar-h: 68px;
+
+  --ring: 0 0 0 3px rgba(240, 223, 32, 0.45);
+  --ease: cubic-bezier(0.2, 0.8, 0.3, 1);
+}
