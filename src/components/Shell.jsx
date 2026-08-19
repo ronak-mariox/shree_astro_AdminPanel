@@ -4,7 +4,18 @@ import { useState } from 'react';
 import { BrandMark, Icon } from './Icon';
 import { Avatar, Button, Input, OverlayPortal } from './ui';
 import { cx } from '../utils/cx';
-import { admin, navGroups, routeTitles } from '../data/nav';
+import { navGroups, routeTitles } from '../data/nav';
+
+/** The API stores a role id; the panel prints it in words. */
+const ROLE_LABELS = {
+  super_admin: 'Super Admin',
+  admin: 'Admin',
+  finance: 'Finance',
+  support_lead: 'Support Lead',
+  content_manager: 'Content Manager',
+  consultation_manager: 'Consultation Manager',
+  user_manager: 'User Manager',
+};
 
 export function Sidebar({ route, onNavigate, collapsed, onSignOut }) {
   return (
@@ -63,7 +74,7 @@ export function Sidebar({ route, onNavigate, collapsed, onSignOut }) {
   );
 }
 
-export function Topbar({ route, collapsed, onToggle, onNavigate, onSignOut }) {
+export function Topbar({ route, collapsed, onToggle, onNavigate, onSignOut, admin }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const crumb = routeTitles[route] || routeTitles.dashboard;
 
@@ -107,13 +118,13 @@ export function Topbar({ route, collapsed, onToggle, onNavigate, onSignOut }) {
             onClick={() => setMenuOpen((open) => !open)}
             aria-expanded={menuOpen}
           >
-            <Avatar name={admin.name} size="sm" />
+            <Avatar name={admin?.name} size="sm" />
             <span style={{ textAlign: 'left' }}>
               <span className="topbar__user-name" style={{ display: 'block' }}>
-                {admin.name}
+                {admin?.name}
               </span>
               <span className="topbar__user-role" style={{ display: 'block' }}>
-                {admin.role}
+                {ROLE_LABELS[admin?.role] || admin?.role}
               </span>
             </span>
             <Icon name="chevronDown" size={14} />
@@ -131,8 +142,8 @@ export function Topbar({ route, collapsed, onToggle, onNavigate, onSignOut }) {
               </OverlayPortal>
               <div className="menu">
                 <p className="menu__header">
-                  <strong>{admin.name}</strong>
-                  <span>{admin.email}</span>
+                  <strong>{admin?.name}</strong>
+                  <span>{admin?.email}</span>
                 </p>
                 <button
                   type="button"

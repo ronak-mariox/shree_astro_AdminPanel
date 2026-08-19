@@ -1,10 +1,13 @@
 /**
  * User Management — the customer directory, their birth details and kundlis,
- * and the block / unblock controls the FRD puts under "Admin controls user
- * activities".
+ * and the block / unblock controls.
+ *
+ * The table asks the API for one page of rows and lets DataTable handle search,
+ * sorting and paging over them. Opening a row fetches that user's full record,
+ * because the listing deliberately does not carry birth details or history.
  */
 
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { DataTable, RowActions } from '../components/DataTable';
 import { Icon } from '../components/Icon';
 import { PageHeader } from '../components/Shell';
@@ -14,12 +17,26 @@ import {
   Chips,
   DetailList,
   Identity,
+  LoadingBlock,
   Modal,
   Note,
   StatCard,
   StatusBadge,
 } from '../components/ui';
-import { users as seedUsers } from '../data/people';
+import { useAction, useApi } from '../hooks/useApi';
+import { getDashboard, getUser, listUsers, setUserStatus } from '../services/admin';
+import { can } from '../services/session';
+import {
+  birthLine,
+  count,
+  date,
+  duration,
+  label,
+  money,
+  phone as formatPhone,
+  relative,
+  signupLabel,
+} from '../utils/format';
 
 const FILTERS = [
   { key: 'all', label: 'All users' },
@@ -28,34 +45,51 @@ const FILTERS = [
   { key: 'unverified', label: 'Unverified' },
 ];
 
-export function UsersPage({ notify }) {
-  const [rows, setRows] = useState(seedUsers);
-  const [filter, setFilter] = useState('all');
-  const [open, setOpen] = useState(null);
+/** How many rows to pull; DataTable pages through them client-side. */
+const PAGE_LIMIT = 100;
 
-  const counts = useMemo(
-    () => ({
-      all: rows.length,
-      active: rows.filter((row) => row.status === 'active').length,
-      blocked: rows.filter((row) => row.status === 'blocked').length,
-      unverified: rows.filter((row) => !row.verified).length,
-    }),
-    [rows],
+export function UsersPage({ notify }) {
+  const [filter, setFilter] = useState('all');
+  const [openId, setOpenId] = useState(null);
+  const [run, busy] = useAction(notify);
+
+  /** 'unverified' has no server-side filter, so it is applied to the rows. */
+  const status = filter === 'active' || filter === 'blocked' ? filter : undefined;
+
+  const { data, loading, error, reload } = useApi(
+    () => listUsers({ status, limit: PAGE_LIMIT }),
+    [status],
+  );
+  const { data: stats } = useApi(() => getDashboard(7), []);
+
+  /** The drawer's record is fetched on open — the listing does not carry it. */
+  const { data: detail, loading: loadingDetail, reload: reloadDetail } = useApi(
+    () => getUser(openId),
+    [openId],
+    { skip: !openId },
   );
 
-  const filtered = useMemo(() => {
-    if (filter === 'all') return rows;
-    if (filter === 'unverified') return rows.filter((row) => !row.verified);
-    return rows.filter((row) => row.status === filter);
-  }, [rows, filter]);
+  const all = data?.items ?? [];
+  const rows = filter === 'unverified' ? all.filter((row) => !row.verified) : all;
 
-  const setStatus = (id, status) => {
-    setRows((current) => current.map((row) => (row.id === id ? { ...row, status } : row)));
-    setOpen((current) => (current?.id === id ? { ...current, status } : current));
-    notify(status === 'blocked' ? 'User blocked' : 'User restored', {
-      tone: status === 'blocked' ? undefined : 'success',
-    });
+  const counts = {
+    all: data?.total ?? 0,
+    active: filter === 'active' ? rows.length : undefined,
+    blocked: filter === 'blocked' ? rows.length : undefined,
+    unverified: filter === 'unverified' ? rows.length : undefined,
   };
+
+  const changeStatus = (id, next) =>
+    run(() => setUserStatus(id, next, next === 'blocked' ? 'Blocked from the admin panel' : undefined), {
+      success: next === 'blocked' ? 'User blocked' : 'User restored',
+      onDone: async () => {
+        await reload();
+        if (openId === id) await reloadDetail();
+      },
+    });
+
+  const canManage = can('users.manage');
+  const open = detail?.user;
 
   const columns = [
     {
@@ -69,7 +103,7 @@ export function UsersPage({ notify }) {
       label: 'Mobile',
       render: (row) => (
         <span className="mono" style={{ fontSize: 12.5 }}>
-          {row.phone}
+          {formatPhone(row.phone)}
         </span>
       ),
     },
@@ -80,16 +114,20 @@ export function UsersPage({ notify }) {
       render: (row) => (
         <span className="row" style={{ gap: 6, fontSize: 12.5 }}>
           <Icon
-            name={
-              row.signup === 'Google' ? 'globe' : row.signup === 'Email' ? 'mail' : 'phone'
-            }
+            name={row.signup === 'google' ? 'globe' : row.signup === 'email' ? 'mail' : 'phone'}
             size={14}
           />
-          {row.signup}
+          {signupLabel(row.signup)}
         </span>
       ),
     },
-    { key: 'joined', label: 'Joined', sortable: true },
+    {
+      key: 'joined',
+      label: 'Joined',
+      sortable: true,
+      sortValue: (row) => new Date(row.joined).getTime(),
+      render: (row) => date(row.joined),
+    },
     {
       key: 'consults',
       label: 'Consults',
@@ -102,7 +140,7 @@ export function UsersPage({ notify }) {
       label: 'Wallet',
       align: 'right',
       sortable: true,
-      render: (row) => <span className="mono">₹{row.wallet.toLocaleString('en-IN')}</span>,
+      render: (row) => <span className="mono">{money(row.wallet)}</span>,
     },
     {
       key: 'status',
@@ -122,20 +160,24 @@ export function UsersPage({ notify }) {
       render: (row) => (
         <RowActions
           actions={[
-            { label: 'View profile', icon: 'eye', onClick: () => setOpen(row) },
-            row.status === 'blocked'
-              ? {
-                  label: 'Unblock',
-                  icon: 'checkCircle',
-                  variant: 'success',
-                  onClick: () => setStatus(row.id, 'active'),
-                }
-              : {
-                  label: 'Block',
-                  icon: 'ban',
-                  variant: 'danger',
-                  onClick: () => setStatus(row.id, 'blocked'),
-                },
+            { label: 'View profile', icon: 'eye', onClick: () => setOpenId(row.id) },
+            ...(canManage
+              ? [
+                  row.status === 'blocked'
+                    ? {
+                        label: 'Unblock',
+                        icon: 'checkCircle',
+                        variant: 'success',
+                        onClick: () => changeStatus(row.id, 'active'),
+                      }
+                    : {
+                        label: 'Block',
+                        icon: 'ban',
+                        variant: 'danger',
+                        onClick: () => changeStatus(row.id, 'blocked'),
+                      },
+                ]
+              : []),
           ]}
         />
       ),
@@ -147,28 +189,44 @@ export function UsersPage({ notify }) {
       <PageHeader
         title="User Management"
         subtitle="Every registered seeker, their birth details and their account state"
-        actions={
-          <>
-            <Button icon="download">Export CSV</Button>
-            <Button variant="primary" icon="send" onClick={() => notify('Broadcast composer opened')}>
-              Message users
-            </Button>
-          </>
-        }
+        actions={<Button icon="refresh" onClick={reload}>Refresh</Button>}
       />
 
       <div className="grid grid--stats" style={{ marginBottom: 16 }}>
-        <StatCard label="Total users" value="48,210" icon="users" tone="brand" delta="+184 today" hint="all time" />
-        <StatCard label="Active this week" value="21,440" icon="activity" tone="success" delta="+6.2%" hint="vs. last week" />
-        <StatCard label="Blocked accounts" value={counts.blocked} icon="ban" delta="1 this month" deltaTone="flat" hint="policy violations" />
+        <StatCard
+          label="Total users"
+          value={count(stats?.users?.total ?? 0)}
+          icon="users"
+          tone="brand"
+          delta={stats ? `+${count(stats.users.newThisMonth)}` : undefined}
+          hint="this month"
+        />
+        <StatCard
+          label="Consultations today"
+          value={count(stats?.consultations?.today ?? 0)}
+          icon="activity"
+          tone="success"
+          delta={stats ? `${stats.consultations.ongoing} live` : undefined}
+          deltaTone="flat"
+          hint="right now"
+        />
+        <StatCard
+          label="Blocked accounts"
+          value={count(rows.filter((row) => row.status === 'blocked').length)}
+          icon="ban"
+          hint="in this view"
+        />
       </div>
 
       <DataTable
         columns={columns}
-        rows={filtered}
-        searchKeys={['name', 'email', 'phone', 'id']}
+        rows={rows}
+        loading={loading}
+        error={error}
+        onRetry={reload}
+        searchKeys={['name', 'email', 'phone', 'userCode']}
         searchPlaceholder="Search by name, email or mobile…"
-        onRowClick={setOpen}
+        onRowClick={(row) => setOpenId(row.id)}
         toolbar={
           <Chips
             value={filter}
@@ -176,118 +234,142 @@ export function UsersPage({ notify }) {
             items={FILTERS.map((item) => ({ ...item, count: counts[item.key] }))}
           />
         }
-        toolbarEnd={<Button size="sm" icon="filter">More filters</Button>}
         empty={{ icon: 'users', title: 'No users match this filter' }}
       />
 
-      {open && (
+      {openId && (
         <Modal
           wide
-          title={open.name}
-          subtitle={`${open.id} · joined ${open.joined}`}
-          onClose={() => setOpen(null)}
+          title={open?.name || 'Loading…'}
+          subtitle={open ? `${open.userCode || open.id} · joined ${date(open.joined)}` : ''}
+          onClose={() => setOpenId(null)}
           footer={
-            <>
-              <Button onClick={() => notify('Password reset link sent')}>Send reset link</Button>
-              {open.status === 'blocked' ? (
-                <Button variant="success" icon="checkCircle" onClick={() => setStatus(open.id, 'active')}>
+            open && canManage ? (
+              open.status === 'blocked' ? (
+                <Button
+                  variant="success"
+                  icon="checkCircle"
+                  disabled={busy}
+                  onClick={() => changeStatus(open.id, 'active')}
+                >
                   Unblock user
                 </Button>
               ) : (
-                <Button variant="danger" icon="ban" onClick={() => setStatus(open.id, 'blocked')}>
+                <Button
+                  variant="danger"
+                  icon="ban"
+                  disabled={busy}
+                  onClick={() => changeStatus(open.id, 'blocked')}
+                >
                   Block user
                 </Button>
-              )}
-            </>
+              )
+            ) : undefined
           }
         >
-          <div className="stack" style={{ gap: 18 }}>
-            <div className="profile-head">
-              <Identity
-                name={open.name}
-                meta={open.email}
-                size="lg"
-                online={open.status === 'active'}
-              />
-              <div className="row" style={{ gap: 6 }}>
-                <StatusBadge status={open.status} />
-                <Badge tone={open.verified ? 'success' : 'warning'}>
-                  {open.verified ? 'Verified' : 'Unverified'}
-                </Badge>
+          {loadingDetail || !open ? (
+            <LoadingBlock />
+          ) : (
+            <div className="stack" style={{ gap: 18 }}>
+              <div className="profile-head">
+                <Identity
+                  name={open.name}
+                  meta={open.email}
+                  size="lg"
+                  online={open.status === 'active'}
+                />
+                <div className="row" style={{ gap: 6 }}>
+                  <StatusBadge status={open.status} />
+                  <Badge tone={open.verified ? 'success' : 'warning'}>
+                    {open.verified ? 'Verified' : 'Unverified'}
+                  </Badge>
+                </div>
               </div>
-            </div>
 
-            {open.status === 'blocked' && (
-              <Note tone="danger" icon="alert">
-                This account is blocked. The user cannot sign in, start consultations or
-                spend their remaining <strong>₹{open.wallet}</strong> wallet balance.
-              </Note>
-            )}
+              {open.status === 'blocked' && (
+                <Note tone="danger" icon="alert">
+                  This account is blocked. The user cannot sign in, start consultations or
+                  spend their remaining <strong>{money(open.wallet?.balance)}</strong> wallet
+                  balance.
+                  {open.blocked?.reason ? ` Reason: ${open.blocked.reason}` : ''}
+                </Note>
+              )}
 
-            <div className="mini-stats">
-              <div>
-                <p className="eyebrow">Consultations</p>
-                <p className="mini-stats__value">{open.consults}</p>
+              <div className="mini-stats">
+                <div>
+                  <p className="eyebrow">Consultations</p>
+                  <p className="mini-stats__value">{open.stats?.consultations ?? 0}</p>
+                </div>
+                <div>
+                  <p className="eyebrow">Total spent</p>
+                  <p className="mini-stats__value">{money(open.wallet?.totalSpent)}</p>
+                </div>
+                <div>
+                  <p className="eyebrow">Wallet</p>
+                  <p className="mini-stats__value">{money(open.wallet?.balance)}</p>
+                </div>
+                <div>
+                  <p className="eyebrow">Kundlis</p>
+                  <p className="mini-stats__value">{open.kundlis}</p>
+                </div>
               </div>
-              <div>
-                <p className="eyebrow">Total spent</p>
-                <p className="mini-stats__value">₹{open.spent.toLocaleString('en-IN')}</p>
-              </div>
-              <div>
-                <p className="eyebrow">Wallet</p>
-                <p className="mini-stats__value">₹{open.wallet.toLocaleString('en-IN')}</p>
-              </div>
-              <div>
-                <p className="eyebrow">Kundlis</p>
-                <p className="mini-stats__value">{open.kundli}</p>
-              </div>
-            </div>
 
-            <section>
-              <h3 className="section-title">Account</h3>
-              <DetailList
-                rows={[
-                  { label: 'User ID', value: open.id },
-                  { label: 'Mobile', value: open.phone },
-                  { label: 'Email', value: open.email },
-                  { label: 'Signed up via', value: open.signup },
-                  { label: 'Last active', value: open.lastActive },
-                ]}
-              />
-            </section>
+              <section>
+                <h3 className="section-title">Account</h3>
+                <DetailList
+                  rows={[
+                    { label: 'User ID', value: open.userCode || open.id },
+                    { label: 'Mobile', value: formatPhone(open.phone, open.countryCode) },
+                    { label: 'Email', value: open.email || '—' },
+                    { label: 'Signed up via', value: signupLabel(open.signup) },
+                    { label: 'Last active', value: relative(open.lastActive) },
+                    {
+                      label: 'Free consultation',
+                      value: open.freeConsultation?.isUsed
+                        ? 'Used'
+                        : `${open.freeConsultation?.minutes ?? 0} minutes left`,
+                    },
+                  ]}
+                />
+              </section>
 
-            <section>
-              <h3 className="section-title">Birth details</h3>
-              <DetailList
-                rows={[
-                  { label: 'Date, time & place', value: open.birth },
-                  { label: 'Moon sign', value: open.zodiac },
-                  { label: 'Kundlis generated', value: `${open.kundli} charts` },
-                ]}
-              />
-            </section>
+              <section>
+                <h3 className="section-title">Birth details</h3>
+                <DetailList
+                  rows={[
+                    { label: 'Date, time & place', value: birthLine(open.birthDetails) },
+                    { label: 'Gender', value: label(open.gender) || '—' },
+                    { label: 'Moon sign', value: open.zodiac?.moonSign || '—' },
+                    { label: 'Sun sign', value: open.zodiac?.sunSign || '—' },
+                    { label: 'Kundlis generated', value: `${open.kundlis} charts` },
+                  ]}
+                />
+              </section>
 
-            <section>
-              <h3 className="section-title">Recent consultations</h3>
-              <div className="stack" style={{ gap: 8 }}>
-                {[
-                  { with: 'Pt. Rajesh Sharma', channel: 'Chat', when: '17 Aug · 22m', amount: 440 },
-                  { with: 'Dr. Suresh Menon', channel: 'Voice', when: '14 Aug · 24m', amount: 840 },
-                  { with: 'Kavita Joshi', channel: 'Chat', when: '09 Aug · 15m', amount: 225 },
-                ].map((item) => (
-                  <div className="mini-row" key={item.when}>
-                    <div>
-                      <p className="strong">{item.with}</p>
-                      <p className="faint" style={{ fontSize: 11.5 }}>
-                        {item.channel} · {item.when}
-                      </p>
-                    </div>
-                    <span className="mono strong">₹{item.amount}</span>
+              <section>
+                <h3 className="section-title">Recent consultations</h3>
+                {open.consultations.length === 0 ? (
+                  <p className="faint" style={{ fontSize: 12.5 }}>
+                    This user has not consulted anyone yet.
+                  </p>
+                ) : (
+                  <div className="stack" style={{ gap: 8 }}>
+                    {open.consultations.map((item) => (
+                      <div className="mini-row" key={item.id}>
+                        <div>
+                          <p className="strong">{item.astrologer || 'Astrologer'}</p>
+                          <p className="faint" style={{ fontSize: 11.5 }}>
+                            {label(item.channel)} · {date(item.at)} · {duration(item.durationSeconds)}
+                          </p>
+                        </div>
+                        <span className="mono strong">{money(item.amount)}</span>
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
-            </section>
-          </div>
+                )}
+              </section>
+            </div>
+          )}
         </Modal>
       )}
     </div>

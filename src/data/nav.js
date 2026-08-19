@@ -13,7 +13,7 @@ export const navGroups = [
     label: 'People',
     items: [
       { key: 'users', label: 'Users', icon: 'users' },
-      { key: 'astrologers', label: 'Astrologers', icon: 'sparkle', count: 6 },
+      { key: 'astrologers', label: 'Astrologers', icon: 'sparkle' },
       { key: 'consultations', label: 'Consultations', icon: 'chat' },
     ],
   },
@@ -52,10 +52,4 @@ export const routeTitles = {
   reports: { title: 'Reporting & Monitoring', group: 'Operations' },
   audit: { title: 'Audit Logs', group: 'Operations' },
   settings: { title: 'Platform Administration', group: 'Operations' },
-};
-
-export const admin = {
-  name: 'Vaibhav Mehra',
-  email: 'admin@shreeastro.com',
-  role: 'Admin',
 };

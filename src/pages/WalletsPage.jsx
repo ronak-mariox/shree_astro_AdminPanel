@@ -1,9 +1,15 @@
 /**
- * Wallet Management — balances held by seekers and astrologers, the movement
- * ledger behind them, manual adjustments, and the astrologer payout queue.
+ * Wallet Management — balances, movement and astrologer payouts.
+ *
+ * Three tabs over the same money: who holds what, every movement, and the
+ * payout queue waiting on an admin.
+ *
+ * A manual adjustment goes through the same ledger as everything else and
+ * carries the name of the admin who made it, so there is no such thing as an
+ * untraceable change to a balance.
  */
 
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { DataTable, RowActions } from '../components/DataTable';
 import { Icon } from '../components/Icon';
 import { PageHeader } from '../components/Shell';
@@ -24,27 +30,98 @@ import {
   Tabs,
   Textarea,
 } from '../components/ui';
-import { payoutRequests, walletAccounts, walletLedger } from '../data/operations';
+import { useAction, useApi } from '../hooks/useApi';
+import {
+  adjustWallet,
+  getSettings,
+  listTransactions,
+  listWallets,
+  listWithdrawals,
+  reviewWithdrawal,
+} from '../services/admin';
+import { can } from '../services/session';
+import { date, dateTime, label, money, relative } from '../utils/format';
 
-const money = (value) => `₹${value.toLocaleString('en-IN')}`;
+const BLANK_ADJUSTMENT = { direction: 'credit', amount: '', note: '' };
+const PAGE_LIMIT = 100;
 
 export function WalletsPage({ notify }) {
   const [tab, setTab] = useState('balances');
   const [type, setType] = useState('all');
   const [adjusting, setAdjusting] = useState(null);
-  const [adjustment, setAdjustment] = useState({ direction: 'credit', amount: '', note: '' });
+  const [adjustment, setAdjustment] = useState(BLANK_ADJUSTMENT);
+  const [rejecting, setRejecting] = useState(null);
+  const [reason, setReason] = useState('');
+  const [run, busy] = useAction(notify);
 
-  const filtered = useMemo(
-    () => (type === 'all' ? walletAccounts : walletAccounts.filter((row) => row.type.toLowerCase() === type)),
+  const wallets = useApi(
+    () => listWallets({ ownerRole: type === 'all' ? undefined : type, limit: PAGE_LIMIT }),
     [type],
+    { skip: tab !== 'balances' },
   );
+  const ledger = useApi(() => listTransactions({ limit: PAGE_LIMIT }), [], {
+    skip: tab !== 'ledger',
+  });
+  const payouts = useApi(() => listWithdrawals({ limit: PAGE_LIMIT }), [], {
+    skip: tab !== 'payouts',
+  });
+  const { data: settings } = useApi(() => getSettings(), []);
 
-  const userFloat = walletAccounts
-    .filter((row) => row.type === 'User')
+  const rows = wallets.data?.items ?? [];
+  const userFloat = rows
+    .filter((row) => row.ownerRole === 'user')
     .reduce((sum, row) => sum + row.balance, 0);
-  const astrologerPayable = walletAccounts
-    .filter((row) => row.type === 'Astrologer')
+  const astrologerPayable = rows
+    .filter((row) => row.ownerRole === 'astrologer')
     .reduce((sum, row) => sum + row.balance, 0);
+
+  const pendingPayouts = (payouts.data?.items ?? []).filter((row) => row.status === 'pending');
+
+  const canAdjust = can('wallets.adjust');
+  const canApprovePayouts = can('payouts.approve');
+
+  const applyAdjustment = () =>
+    run(
+      () =>
+        adjustWallet({
+          ownerRole: adjusting.ownerRole,
+          ownerId: adjusting.id,
+          direction: adjustment.direction,
+          amount: Number(adjustment.amount),
+          reason: adjustment.note.trim(),
+        }),
+      {
+        success: `${adjustment.direction === 'credit' ? 'Credited' : 'Debited'} ${money(
+          adjustment.amount,
+        )} · ${adjusting.holder}`,
+        onDone: async () => {
+          setAdjusting(null);
+          setAdjustment(BLANK_ADJUSTMENT);
+          await wallets.reload();
+        },
+      },
+    );
+
+  const decidePayout = (withdrawal, status) =>
+    run(
+      () =>
+        reviewWithdrawal(withdrawal._id, {
+          status,
+          reason: status === 'rejected' ? reason.trim() || 'Not approved' : undefined,
+          payoutReference: status === 'approved' ? `MANUAL-${Date.now()}` : undefined,
+        }),
+      {
+        success:
+          status === 'approved'
+            ? `Payout of ${money(withdrawal.amount)} marked paid`
+            : 'Payout rejected and the money returned',
+        onDone: async () => {
+          setRejecting(null);
+          setReason('');
+          await payouts.reload();
+        },
+      },
+    );
 
   const balanceColumns = [
     {
@@ -54,17 +131,17 @@ export function WalletsPage({ notify }) {
       render: (row) => (
         <Identity
           name={row.holder}
-          meta={row.type === 'User' ? 'Seeker wallet' : 'Astrologer earnings wallet'}
-          tone={row.type === 'Astrologer' ? 'muted' : undefined}
+          meta={row.ownerRole === 'user' ? 'Seeker wallet' : 'Astrologer earnings wallet'}
+          tone={row.ownerRole === 'astrologer' ? 'muted' : undefined}
         />
       ),
     },
     {
-      key: 'type',
+      key: 'ownerRole',
       label: 'Type',
       sortable: true,
       render: (row) => (
-        <Badge tone={row.type === 'User' ? 'info' : 'lilac'}>{row.type}</Badge>
+        <Badge tone={row.ownerRole === 'user' ? 'info' : 'lilac'}>{label(row.ownerRole)}</Badge>
       ),
     },
     {
@@ -88,49 +165,67 @@ export function WalletsPage({ notify }) {
       sortable: true,
       render: (row) => <span className="mono faint">{money(row.spent)}</span>,
     },
-    { key: 'updated', label: 'Last movement', sortable: true },
+    {
+      key: 'updatedAt',
+      label: 'Last movement',
+      sortable: true,
+      render: (row) => (row.updatedAt ? relative(row.updatedAt) : '—'),
+    },
     {
       key: 'actions',
       label: '',
       align: 'actions',
-      render: (row) => (
-        <RowActions
-          actions={[
-            {
-              label: 'Adjust balance',
-              icon: 'edit',
-              onClick: () => {
-                setAdjusting(row);
-                setAdjustment({ direction: 'credit', amount: '', note: '' });
+      render: (row) =>
+        canAdjust ? (
+          <RowActions
+            actions={[
+              {
+                label: 'Adjust balance',
+                icon: 'edit',
+                onClick: () => {
+                  setAdjusting(row);
+                  setAdjustment(BLANK_ADJUSTMENT);
+                },
               },
-            },
-            { label: 'Statement', icon: 'download', onClick: () => notify('Statement downloaded') },
-          ]}
-        />
-      ),
+            ]}
+          />
+        ) : null,
     },
   ];
 
   const ledgerColumns = [
     {
-      key: 'account',
-      label: 'Account',
-      sortable: true,
-      render: (row) => <Identity name={row.account} size="sm" />,
+      key: 'title',
+      label: 'Movement',
+      render: (row) => (
+        <div>
+          <p className="strong truncate">{row.title || label(row.type)}</p>
+          <p className="faint" style={{ fontSize: 11.5 }}>
+            {label(row.ownerRole)} · {row.reference}
+          </p>
+        </div>
+      ),
     },
-    { key: 'note', label: 'Description' },
     {
       key: 'amount',
       label: 'Amount',
       align: 'right',
       sortable: true,
       render: (row) => (
-        <span className={`mono strong ${row.credit ? 'amount-credit' : 'amount-debit'}`}>
-          {row.credit ? '+' : '−'} {money(row.amount)}
+        <span
+          className={`mono strong ${row.direction === 'credit' ? 'amount-credit' : 'amount-debit'}`}
+        >
+          {row.direction === 'credit' ? '+' : '−'} {money(row.amount)}
         </span>
       ),
     },
-    { key: 'at', label: 'When', sortable: true },
+    {
+      key: 'createdAt',
+      label: 'When',
+      sortable: true,
+      sortValue: (row) => new Date(row.createdAt).getTime(),
+      render: (row) => dateTime(row.createdAt),
+    },
   ];
 
   const payoutColumns = [
@@ -138,16 +233,33 @@ export function WalletsPage({ notify }) {
       key: 'astrologer',
       label: 'Astrologer',
       sortable: true,
-      render: (row) => <Identity name={row.astrologer} meta={row.method} />,
+      render: (row) => (
+        <Identity name={row.astrologer?.name || 'Unknown'} meta={row.astrologer?.astroCode} />
+      ),
     },
     {
       key: 'amount',
-      label: 'Payable',
+      label: 'Amount',
       align: 'right',
       sortable: true,
       render: (row) => <span className="mono strong">{money(row.amount)}</span>,
     },
-    { key: 'requested', label: 'Requested', sortable: true },
+    {
+      key: 'bank',
+      label: 'To',
+      render: (row) => (
+        <span className="faint" style={{ fontSize: 12 }}>
+          {row.bankAccount?.bankName} ••••{String(row.bankAccount?.accountNumber || '').slice(-4)}
+        </span>
+      ),
+    },
+    {
+      key: 'requestedAt',
+      label: 'Requested',
+      sortable: true,
+      sortValue: (row) => new Date(row.requestedAt).getTime(),
+      render: (row) => date(row.requestedAt),
+    },
     {
       key: 'status',
       label: 'Status',
@@ -159,21 +271,24 @@ export function WalletsPage({ notify }) {
       label: '',
       align: 'actions',
       render: (row) =>
-        row.status === 'pending' ? (
+        row.status === 'pending' && canApprovePayouts ? (
           <RowActions
             actions={[
               {
-                label: 'Approve payout',
+                label: 'Mark paid',
                 icon: 'check',
                 variant: 'success',
-                onClick: () => notify(`Payout of ${money(row.amount)} approved`, { tone: 'success' }),
+                onClick: () => decidePayout(row, 'approved'),
               },
-              { label: 'Hold', icon: 'ban', variant: 'danger', onClick: () => notify('Payout held') },
+              {
+                label: 'Reject',
+                icon: 'ban',
+                variant: 'danger',
+                onClick: () => setRejecting(row),
+              },
             ]}
           />
-        ) : (
-          <RowActions actions={[{ label: 'View', icon: 'eye', onClick: () => notify('Payout detail') }]} />
-        ),
+        ) : null,
     },
   ];
 
@@ -183,20 +298,47 @@ export function WalletsPage({ notify }) {
         title="Wallet Management"
         subtitle="Balances, movement and astrologer payouts"
         actions={
-          <>
-            <Button icon="download">Export ledger</Button>
-            <Button variant="primary" icon="plus" onClick={() => setAdjusting(walletAccounts[0])}>
-              Manual adjustment
-            </Button>
-          </>
+          <Button
+            icon="refresh"
+            onClick={() => {
+              wallets.reload();
+              ledger.reload();
+              payouts.reload();
+            }}
+          >
+            Refresh
+          </Button>
         }
       />
 
       <div className="grid grid--stats" style={{ marginBottom: 16 }}>
-        <StatCard label="User wallet float" value={money(userFloat)} icon="wallet" tone="brand" delta="+9.2%" hint="held on platform" />
-        <StatCard label="Astrologer payable" value={money(astrologerPayable)} icon="rupee" tone="yellow" delta="2 requests" deltaTone="flat" hint="awaiting payout" />
-        <StatCard label="Recharges today" value="₹42,300" icon="trendingUp" tone="success" delta="+18%" hint="112 top-ups" />
-        <StatCard label="Spent on consults" value="₹31,880" icon="chat" delta="+6.4%" hint="today" />
+        <StatCard
+          label="User wallet float"
+          value={money(userFloat)}
+          icon="wallet"
+          tone="brand"
+          hint="held on the platform"
+        />
+        <StatCard
+          label="Astrologer payable"
+          value={money(astrologerPayable)}
+          icon="rupee"
+          tone="yellow"
+          hint="withdrawable now"
+        />
+        <StatCard
+          label="Payout requests"
+          value={pendingPayouts.length}
+          icon="inbox"
+          tone="success"
+          hint="awaiting approval"
+        />
+        <StatCard
+          label="Minimum payout"
+          value={money(settings?.settings?.minPayout ?? 0)}
+          icon="shield"
+          hint={label(settings?.settings?.payoutCycle) || 'cycle'}
+        />
       </div>
 
       <div className="row row--between" style={{ marginBottom: 14 }}>
@@ -206,7 +348,7 @@ export function WalletsPage({ notify }) {
           items={[
             { key: 'balances', label: 'Balances' },
             { key: 'ledger', label: 'Movement ledger' },
-            { key: 'payouts', label: `Payout queue (${payoutRequests.filter((p) => p.status === 'pending').length})` },
+            { key: 'payouts', label: `Payout queue (${pendingPayouts.length})` },
           ]}
         />
         {tab === 'balances' && (
@@ -225,8 +367,11 @@ export function WalletsPage({ notify }) {
       {tab === 'balances' && (
         <DataTable
           columns={balanceColumns}
-          rows={filtered}
-          searchKeys={['holder', 'type']}
+          rows={rows}
+          loading={wallets.loading}
+          error={wallets.error}
+          onRetry={wallets.reload}
+          searchKeys={['holder', 'email']}
           searchPlaceholder="Search wallets by holder…"
           empty={{ icon: 'wallet', title: 'No wallets in this view' }}
         />
@@ -236,26 +381,32 @@ export function WalletsPage({ notify }) {
         <div className="grid grid--sidebar">
           <DataTable
             columns={ledgerColumns}
-            rows={walletLedger}
-            searchKeys={['account', 'note']}
+            rows={ledger.data?.items ?? []}
+            loading={ledger.loading}
+            error={ledger.error}
+            onRetry={ledger.reload}
+            searchKeys={['title', 'reference']}
             searchPlaceholder="Search movement…"
             pageSize={10}
             empty={{ icon: 'inbox', title: 'No movement recorded' }}
           />
-          <Card title="Today at a glance" subtitle="Wallet movement across the platform">
+          <Card title="Wallet rules" subtitle="Read live from platform settings">
             <div className="stack" style={{ gap: 14 }}>
               <DetailList
                 rows={[
-                  { label: 'Credits (recharges)', value: '₹42,300' },
-                  { label: 'Credits (refunds)', value: '₹1,100' },
-                  { label: 'Debits (consultations)', value: '₹31,880' },
-                  { label: 'Debits (payouts)', value: '₹25,000' },
-                  { label: 'Net movement', value: '− ₹13,480' },
+                  { label: 'Minimum recharge', value: money(settings?.settings?.minRecharge) },
+                  { label: 'Maximum recharge', value: money(settings?.settings?.maxRecharge) },
+                  { label: 'Minimum payout', value: money(settings?.settings?.minPayout) },
+                  { label: 'Payout cycle', value: label(settings?.settings?.payoutCycle) },
+                  {
+                    label: 'Platform commission',
+                    value: `${settings?.settings?.commissionPercent ?? 0}%`,
+                  },
                 ]}
               />
               <Note tone="info" icon="info">
-                Wallet credits post as soon as the Razorpay webhook confirms capture.
-                Manual adjustments are logged against your admin account.
+                Every movement is a row in this ledger, and a balance is only ever changed by
+                posting one. Manual adjustments carry the name of the admin who made them.
               </Note>
             </div>
           </Card>
@@ -266,8 +417,11 @@ export function WalletsPage({ notify }) {
         <div className="grid grid--sidebar">
           <DataTable
             columns={payoutColumns}
-            rows={payoutRequests}
-            searchKeys={['astrologer', 'method']}
+            rows={payouts.data?.items ?? []}
+            loading={payouts.loading}
+            error={payouts.error}
+            onRetry={payouts.reload}
+            searchKeys={['reference']}
             searchPlaceholder="Search payout requests…"
             empty={{ icon: 'wallet', title: 'No payout requests' }}
           />
@@ -275,15 +429,15 @@ export function WalletsPage({ notify }) {
             <div className="stack" style={{ gap: 14 }}>
               <DetailList
                 rows={[
-                  { label: 'Minimum payout', value: '₹1,000' },
-                  { label: 'Cycle', value: 'Weekly · Friday' },
-                  { label: 'Processing time', value: '1–2 working days' },
-                  { label: 'TDS deduction', value: '10% above ₹30,000' },
+                  { label: 'Minimum payout', value: money(settings?.settings?.minPayout) },
+                  { label: 'Cycle', value: label(settings?.settings?.payoutCycle) },
+                  { label: 'Pending requests', value: `${pendingPayouts.length}` },
                 ]}
               />
-              <Note tone="success" icon="checkCircle">
-                Bank details for both pending requests are verified against the
-                astrologer&rsquo;s uploaded proof.
+              <Note tone="info" icon="info">
+                The money already left the astrologer&rsquo;s balance when they asked, so
+                approving only records the transfer. <strong>Make the bank transfer first</strong>,
+                then mark it paid. Rejecting puts the money back.
               </Note>
             </div>
           </Card>
@@ -301,14 +455,8 @@ export function WalletsPage({ notify }) {
               <Button
                 variant="primary"
                 icon="check"
-                disabled={!adjustment.amount || adjustment.note.trim().length < 4}
-                onClick={() => {
-                  notify(
-                    `${adjustment.direction === 'credit' ? 'Credited' : 'Debited'} ₹${adjustment.amount} · ${adjusting.holder}`,
-                    { tone: 'success' },
-                  );
-                  setAdjusting(null);
-                }}
+                disabled={busy || !adjustment.amount || adjustment.note.trim().length < 4}
+                onClick={applyAdjustment}
               >
                 Apply adjustment
               </Button>
@@ -349,7 +497,7 @@ export function WalletsPage({ notify }) {
 
             <Field label="Reason" hint="Shown in the ledger and the holder's transaction history">
               <Textarea
-                placeholder="e.g. Goodwill credit for consultation c-9035 that ended early."
+                placeholder="e.g. Goodwill credit for a consultation that ended early."
                 value={adjustment.note}
                 onChange={(event) =>
                   setAdjustment((current) => ({ ...current, note: event.target.value }))
@@ -369,6 +517,51 @@ export function WalletsPage({ notify }) {
                 )}
               </strong>
             </div>
+          </div>
+        </Modal>
+      )}
+
+      {rejecting && (
+        <Modal
+          title="Reject this payout?"
+          subtitle={`${rejecting.astrologer?.name} · ${money(rejecting.amount)}`}
+          onClose={() => {
+            setRejecting(null);
+            setReason('');
+          }}
+          footer={
+            <>
+              <Button
+                onClick={() => {
+                  setRejecting(null);
+                  setReason('');
+                }}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="danger"
+                icon="ban"
+                disabled={busy}
+                onClick={() => decidePayout(rejecting, 'rejected')}
+              >
+                Reject payout
+              </Button>
+            </>
+          }
+        >
+          <div className="stack" style={{ gap: 14 }}>
+            <Note tone="info" icon="info">
+              The money goes straight back into the astrologer&rsquo;s withdrawable balance,
+              and they are told why.
+            </Note>
+            <Field label="Reason">
+              <Textarea
+                placeholder="e.g. The bank details did not match the uploaded proof."
+                value={reason}
+                onChange={(event) => setReason(event.target.value)}
+              />
+            </Field>
           </div>
         </Modal>
       )}

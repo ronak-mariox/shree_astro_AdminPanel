@@ -1,10 +1,15 @@
 /**
  * Astrologer Management — the marketplace listing, the approval queue with its
- * document checks, and the per-astrologer rates, availability and earnings the
+ * document checks, and the per-astrologer rates, commission and earnings the
  * astrologer app reads back.
+ *
+ * Two kinds of row end up here. An astrologer who **applied** arrives as an
+ * application to review. An astrologer an admin **created** is approved from the
+ * moment they exist — the short form asks only for an email, the commission and
+ * whether they are listed, and they fill in the rest from their own app.
  */
 
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { DataTable, RowActions } from '../components/DataTable';
 import { Icon } from '../components/Icon';
 import { PageHeader } from '../components/Shell';
@@ -17,25 +22,45 @@ import {
   Field,
   Identity,
   Input,
+  LoadingBlock,
   Modal,
   Note,
   Progress,
-  StatCard,
   Select,
+  StatCard,
   StatusBadge,
   Textarea,
-  Toggle,
 } from '../components/ui';
-import { astrologerDocuments, astrologers as seed } from '../data/people';
+import { useAction, useApi } from '../hooks/useApi';
+import {
+  approveAstrologer,
+  createAstrologer,
+  getAstrologer,
+  getDashboard,
+  listAstrologers,
+  rejectAstrologer,
+  reviewBankAccount,
+  reviewDocument,
+  reviewPriceChange,
+  setAstrologerStatus,
+} from '../services/admin';
+import { can } from '../services/session';
+import { count, date, label, money, orDash, phone as formatPhone } from '../utils/format';
 
+/**
+ * The tabs, and what each asks the API for.
+ *
+ * "Applications" is everything short of a decision — the wizard states an
+ * astrologer walks through before an admin sees them.
+ */
 const FILTERS = [
-  { key: 'all', label: 'All' },
-  { key: 'approved', label: 'Approved' },
-  { key: 'pending', label: 'Applications' },
-  { key: 'blocked', label: 'Blocked' },
+  { key: 'all', label: 'All', query: {} },
+  { key: 'approved', label: 'Approved', query: { applicationStatus: 'approved', status: 'active' } },
+  { key: 'pending', label: 'Applications', query: { applicationStatus: 'under_review' } },
+  { key: 'blocked', label: 'Blocked', query: { status: 'blocked' } },
 ];
 
-const DOC_TONE = { verified: 'success', pending: 'warning', rejected: 'danger' };
+const REVIEW_TONE = { approved: 'success', pending: 'warning', rejected: 'danger' };
 
 /** A listed astrologer is either approved or blocked — nothing in between. */
 const LISTING_STATUS = [
@@ -43,120 +68,118 @@ const LISTING_STATUS = [
   { value: 'blocked', label: 'Blocked · hidden from the apps' },
 ];
 
-const BLANK_DRAFT = {
-  name: '',
-  email: '',
-  phone: '',
-  skills: '',
-  languages: '',
-  experience: '',
-  chatRate: '',
-  callRate: '',
-  commission: '70',
-  availability: '',
-  status: 'approved',
-};
+/**
+ * The short form.
+ *
+ * Only what an admin decides: who they are, the platform's cut and whether they
+ * are listed. Everything else — mobile number, expertise, languages, rates and
+ * availability — the astrologer fills in from their own profile once they sign
+ * in with this email address.
+ */
+const BLANK_DRAFT = { email: '', commission: '25', status: 'approved' };
 
-const today = () =>
-  new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+/** Opening rates, offered when approving an application. */
+const BLANK_APPROVAL = { chatRate: '20', callRate: '30', freeMinutes: '3', commission: '25' };
+
+const PAGE_LIMIT = 100;
 
 export function AstrologersPage({ notify }) {
-  const [rows, setRows] = useState(seed);
   const [filter, setFilter] = useState('all');
-  const [open, setOpen] = useState(null);
+  const [openId, setOpenId] = useState(null);
   const [rejecting, setRejecting] = useState(null);
   const [reason, setReason] = useState('');
   const [draft, setDraft] = useState(null);
+  const [approval, setApproval] = useState(null);
+  const [run, busy] = useAction(notify);
 
-  const counts = useMemo(
-    () =>
-      FILTERS.reduce(
-        (acc, item) => ({
-          ...acc,
-          [item.key]:
-            item.key === 'all' ? rows.length : rows.filter((row) => row.status === item.key).length,
-        }),
-        {},
-      ),
-    [rows],
+  const query = FILTERS.find((item) => item.key === filter)?.query ?? {};
+
+  const { data, loading, error, reload } = useApi(
+    () => listAstrologers({ ...query, limit: PAGE_LIMIT }),
+    [filter],
+  );
+  const { data: stats } = useApi(() => getDashboard(7), []);
+  const { data: detail, loading: loadingDetail, reload: reloadDetail } = useApi(
+    () => getAstrologer(openId),
+    [openId],
+    { skip: !openId },
   );
 
-  const filtered = filter === 'all' ? rows : rows.filter((row) => row.status === filter);
+  const rows = data?.items ?? [];
+  const canApprove = can('astrologers.approve');
+  const canManage = can('astrologers.manage');
 
-  const setStatus = (id, status, message) => {
-    setRows((current) =>
-      current.map((row) =>
-        row.id === id
-          ? {
-              ...row,
-              status,
-              online: status === 'approved' ? row.online : false,
-              documents: status === 'approved' ? 'verified' : row.documents,
-            }
-          : row,
-      ),
-    );
-    setOpen((current) =>
-      current?.id === id
-        ? { ...current, status, online: status === 'approved' ? current.online : false }
-        : current,
-    );
-    notify(message, { tone: status === 'approved' ? 'success' : undefined });
+  const after = async () => {
+    await reload();
+    if (openId) await reloadDetail();
   };
 
-  const toggleOnline = (id) => {
-    setRows((current) =>
-      current.map((row) => (row.id === id ? { ...row, online: !row.online } : row)),
+  const changeStatus = (id, status, name) =>
+    run(() => setAstrologerStatus(id, status, status === 'blocked' ? 'Blocked from the admin panel' : undefined), {
+      success: `${name} ${status === 'blocked' ? 'blocked' : 'unblocked'}`,
+      onDone: after,
+    });
+
+  const submitApproval = () =>
+    run(
+      () =>
+        approveAstrologer(approval.id, {
+          commissionPercent: Number(approval.commission),
+          services: [
+            {
+              type: 'chat',
+              ratePerMinute: Number(approval.chatRate),
+              freeMinutes: Number(approval.freeMinutes) || 0,
+              isEnabled: true,
+            },
+            { type: 'call', ratePerMinute: Number(approval.callRate), isEnabled: true },
+          ],
+        }),
+      {
+        success: `${approval.name} approved and published`,
+        onDone: async () => {
+          setApproval(null);
+          await after();
+        },
+      },
     );
-    setOpen((current) => (current?.id === id ? { ...current, online: !current.online } : current));
-  };
+
+  const submitRejection = () =>
+    run(() => rejectAstrologer(rejecting.id, reason.trim()), {
+      success: `${rejecting.name} rejected`,
+      onDone: async () => {
+        setRejecting(null);
+        setReason('');
+        setOpenId(null);
+        await reload();
+      },
+    });
+
+  const createFromForm = () =>
+    run(
+      () =>
+        createAstrologer({
+          email: draft.email.trim(),
+          commissionPercent: Number(draft.commission),
+          status: draft.status,
+        }),
+      {
+        success: 'Astrologer created — they sign in with that email',
+        onDone: async () => {
+          setDraft(null);
+          await reload();
+        },
+      },
+    );
 
   const setDraftField = (key) => (event) =>
     setDraft((current) => ({ ...current, [key]: event.target.value }));
 
   const draftValid =
     draft &&
-    draft.name.trim().length > 2 &&
     /^\S+@\S+\.\S+$/.test(draft.email.trim()) &&
-    draft.phone.trim().length >= 10 &&
-    draft.skills.trim().length > 1 &&
-    Number(draft.chatRate) > 0 &&
-    Number(draft.callRate) > 0;
-
-  const createAstrologer = () => {
-    const nextNumber =
-      Math.max(0, ...rows.map((row) => Number(String(row.id).split('-')[1]) || 0)) + 1;
-    const created = {
-      id: `a-${nextNumber}`,
-      name: draft.name.trim(),
-      email: draft.email.trim(),
-      phone: draft.phone.trim(),
-      skills: draft.skills.trim(),
-      languages: draft.languages.trim() || 'Hindi, English',
-      experience: Number(draft.experience) || 0,
-      chatRate: Number(draft.chatRate),
-      callRate: Number(draft.callRate),
-      rating: 0,
-      reviews: 0,
-      consults: 0,
-      earnings: 0,
-      payable: 0,
-      status: draft.status,
-      online: false,
-      availability: draft.availability.trim() || 'Not set',
-      joined: today(),
-      documents: draft.status === 'approved' ? 'verified' : 'pending',
-      commission: Number(draft.commission) || 70,
-    };
-    setRows((current) => [created, ...current]);
-    setDraft(null);
-    notify(
-      draft.status === 'approved'
-        ? `${created.name} created and listed`
-        : `${created.name} created as blocked`,
-      { tone: draft.status === 'approved' ? 'success' : undefined },
-    );
-  };
+    Number(draft.commission) >= 0 &&
+    Number(draft.commission) <= 100;
 
   const columns = [
     {
@@ -164,29 +187,36 @@ export function AstrologersPage({ notify }) {
       label: 'Astrologer',
       sortable: true,
       render: (row) => (
-        <Identity name={row.name} meta={row.skills} online={row.status === 'approved' ? row.online : undefined} />
+        <Identity
+          name={row.name}
+          meta={label(row.expertise) || row.email}
+          online={row.applicationStatus === 'approved' ? row.online : undefined}
+        />
       ),
     },
     {
-      key: 'experience',
+      key: 'experienceYears',
       label: 'Experience',
       sortable: true,
-      render: (row) => `${row.experience} yrs`,
+      render: (row) => (row.experienceYears ? `${row.experienceYears} yrs` : '—'),
     },
     {
-      key: 'chatRate',
+      key: 'rates',
       label: 'Rates',
-      sortable: true,
-      render: (row) => (
-        <span className="rate-cell">
-          <span>
-            <Icon name="chat" size={12} /> ₹{row.chatRate}
+      /** No rate yet means they have not finished setting themselves up. */
+      render: (row) =>
+        row.rates?.chat || row.rates?.call ? (
+          <span className="rate-cell">
+            <span>
+              <Icon name="chat" size={12} /> {row.rates.chat ? money(row.rates.chat.now) : '—'}
+            </span>
+            <span>
+              <Icon name="phone" size={12} /> {row.rates.call ? money(row.rates.call.now) : '—'}
+            </span>
           </span>
-          <span>
-            <Icon name="phone" size={12} /> ₹{row.callRate}
-          </span>
-        </span>
-      ),
+        ) : (
+          <span className="faint">Not set</span>
+        ),
     },
     {
       key: 'rating',
@@ -200,7 +230,7 @@ export function AstrologersPage({ notify }) {
             </span>
             <span className="mono strong">{row.rating}</span>
             <span className="faint" style={{ fontSize: 11 }}>
-              ({row.reviews})
+              ({row.ratingCount})
             </span>
           </span>
         ) : (
@@ -208,24 +238,28 @@ export function AstrologersPage({ notify }) {
         ),
     },
     {
-      key: 'consults',
+      key: 'consultations',
       label: 'Consults',
       align: 'right',
       sortable: true,
-      render: (row) => <span className="mono">{row.consults.toLocaleString('en-IN')}</span>,
+      render: (row) => <span className="mono">{count(row.consultations)}</span>,
     },
     {
       key: 'earnings',
       label: 'Earnings',
       align: 'right',
       sortable: true,
-      render: (row) => <span className="mono">₹{row.earnings.toLocaleString('en-IN')}</span>,
+      render: (row) => <span className="mono">{money(row.earnings)}</span>,
     },
     {
       key: 'status',
       label: 'Status',
       sortable: true,
-      render: (row) => <StatusBadge status={row.status} />,
+      render: (row) => (
+        <div className="row" style={{ gap: 6 }}>
+          <StatusBadge status={row.status === 'blocked' ? 'blocked' : row.applicationStatus} />
+        </div>
+      ),
     },
     {
       key: 'actions',
@@ -234,43 +268,52 @@ export function AstrologersPage({ notify }) {
       render: (row) => (
         <RowActions
           actions={
-            row.status === 'pending'
+            row.applicationStatus === 'under_review'
               ? [
-                  { label: 'Review', icon: 'eye', onClick: () => setOpen(row) },
-                  {
-                    label: 'Approve',
-                    icon: 'check',
-                    variant: 'success',
-                    onClick: () => setStatus(row.id, 'approved', `${row.name} approved`),
-                  },
-                  {
-                    label: 'Reject',
-                    icon: 'x',
-                    variant: 'danger',
-                    onClick: () => setRejecting(row),
-                  },
+                  { label: 'Review', icon: 'eye', onClick: () => setOpenId(row.id) },
+                  ...(canApprove
+                    ? [
+                        {
+                          label: 'Approve',
+                          icon: 'check',
+                          variant: 'success',
+                          onClick: () => setApproval({ ...BLANK_APPROVAL, id: row.id, name: row.name }),
+                        },
+                        { label: 'Reject', icon: 'x', variant: 'danger', onClick: () => setRejecting(row) },
+                      ]
+                    : []),
                 ]
               : [
-                  { label: 'View', icon: 'eye', onClick: () => setOpen(row) },
-                  row.status === 'blocked'
-                    ? {
-                        label: 'Unblock',
-                        icon: 'checkCircle',
-                        variant: 'success',
-                        onClick: () => setStatus(row.id, 'approved', `${row.name} unblocked`),
-                      }
-                    : {
-                        label: 'Block',
-                        icon: 'ban',
-                        variant: 'danger',
-                        onClick: () => setStatus(row.id, 'blocked', `${row.name} blocked`),
-                      },
+                  { label: 'View', icon: 'eye', onClick: () => setOpenId(row.id) },
+                  ...(canManage
+                    ? [
+                        row.status === 'blocked'
+                          ? {
+                              label: 'Unblock',
+                              icon: 'checkCircle',
+                              variant: 'success',
+                              onClick: () => changeStatus(row.id, 'active', row.name),
+                            }
+                          : {
+                              label: 'Block',
+                              icon: 'ban',
+                              variant: 'danger',
+                              onClick: () => changeStatus(row.id, 'blocked', row.name),
+                            },
+                      ]
+                    : []),
                 ]
           }
         />
       ),
     },
   ];
+
+  const open = detail?.astrologer;
+  const profile = detail?.profile;
+  const documents = detail?.documents ?? [];
+  const bankAccounts = detail?.bankAccounts ?? [];
+  const priceChanges = (detail?.priceChangeRequests ?? []).filter((r) => r.status === 'pending');
 
   return (
     <div className="page">
@@ -279,225 +322,460 @@ export function AstrologersPage({ notify }) {
         subtitle="Approve applications, verify documents and manage the marketplace listing"
         actions={
           <>
-            <Button icon="download">Export</Button>
-            <Button variant="primary" icon="plus" onClick={() => setDraft(BLANK_DRAFT)}>
-              Create astrologer
-            </Button>
+            <Button icon="refresh" onClick={reload}>Refresh</Button>
+            {canManage && (
+              <Button variant="primary" icon="plus" onClick={() => setDraft(BLANK_DRAFT)}>
+                Create astrologer
+              </Button>
+            )}
           </>
         }
       />
 
       <div className="grid grid--stats" style={{ marginBottom: 16 }}>
-        <StatCard label="Approved astrologers" value="212" icon="sparkle" tone="yellow" delta="+6" hint="this month" />
-        <StatCard label="Online right now" value={rows.filter((r) => r.online).length} icon="activity" tone="success" delta="Peak 84" deltaTone="flat" hint="today" />
-        <StatCard label="Applications pending" value={counts.pending || 0} icon="inbox" tone="brand" delta="2 new" hint="awaiting verification" />
-        <StatCard label="Payable this cycle" value="₹1.24L" icon="wallet" delta="+18%" hint="after commission" />
+        <StatCard
+          label="Approved astrologers"
+          value={count(stats?.astrologers?.active ?? 0)}
+          icon="sparkle"
+          tone="yellow"
+          hint="listed on the marketplace"
+        />
+        <StatCard
+          label="Online right now"
+          value={count(rows.filter((row) => row.online).length)}
+          icon="activity"
+          tone="success"
+          hint="in this view"
+        />
+        <StatCard
+          label="Applications pending"
+          value={count(stats?.astrologers?.pendingApplications ?? 0)}
+          icon="inbox"
+          tone="brand"
+          hint="awaiting verification"
+        />
+        <StatCard
+          label="Live consultations"
+          value={count(stats?.consultations?.ongoing ?? 0)}
+          icon="chat"
+          hint="running now"
+        />
       </div>
 
-      {counts.pending > 0 && (
+      {stats?.astrologers?.pendingApplications > 0 && filter !== 'pending' && (
         <div style={{ marginBottom: 16 }}>
           <Note tone="info" icon="alert">
-            <strong>{counts.pending} applications</strong> are waiting on document
-            verification. Approving publishes the astrologer to the marketplace immediately.
+            <strong>{stats.astrologers.pendingApplications} applications</strong> are waiting on
+            document verification. Approving publishes the astrologer to the marketplace
+            immediately.
           </Note>
         </div>
       )}
 
       <DataTable
         columns={columns}
-        rows={filtered}
-        searchKeys={['name', 'email', 'skills', 'languages']}
-        searchPlaceholder="Search by name, skill or language…"
-        onRowClick={setOpen}
-        toolbar={
-          <Chips
-            value={filter}
-            onChange={setFilter}
-            items={FILTERS.map((item) => ({ ...item, count: counts[item.key] }))}
-          />
-        }
+        rows={rows}
+        loading={loading}
+        error={error}
+        onRetry={reload}
+        searchKeys={['name', 'email', 'astroCode']}
+        searchPlaceholder="Search by name or email…"
+        onRowClick={(row) => setOpenId(row.id)}
+        toolbar={<Chips value={filter} onChange={setFilter} items={FILTERS} />}
         empty={{ icon: 'sparkle', title: 'No astrologers in this view' }}
       />
 
-      {open && (
+      {openId && (
         <Drawer
           wide
-          title={open.name}
-          subtitle={`${open.id} · applied ${open.joined}`}
-          onClose={() => setOpen(null)}
+          title={open?.name || 'Loading…'}
+          subtitle={open ? `${open.astroCode || ''} · joined ${date(open.createdAt)}` : ''}
+          onClose={() => setOpenId(null)}
           footer={
-            open.status === 'pending' ? (
-              <>
-                <Button variant="danger" icon="x" onClick={() => setRejecting(open)}>
-                  Reject
-                </Button>
+            open && open.applicationStatus === 'under_review' ? (
+              canApprove && (
+                <>
+                  <Button variant="danger" icon="x" onClick={() => setRejecting(open)}>
+                    Reject
+                  </Button>
+                  <Button
+                    variant="primary"
+                    icon="check"
+                    onClick={() => setApproval({ ...BLANK_APPROVAL, id: open._id, name: open.name })}
+                  >
+                    Approve &amp; publish
+                  </Button>
+                </>
+              )
+            ) : open && canManage ? (
+              open.status === 'blocked' ? (
                 <Button
-                  variant="primary"
-                  icon="check"
-                  onClick={() => setStatus(open.id, 'approved', `${open.name} approved`)}
+                  variant="success"
+                  icon="checkCircle"
+                  disabled={busy}
+                  onClick={() => changeStatus(open._id, 'active', open.name)}
                 >
-                  Approve &amp; publish
+                  Unblock
                 </Button>
-              </>
-            ) : (
-              <>
-                <Button onClick={() => notify('Profile edit opened')}>Edit profile</Button>
-                {open.status === 'blocked' ? (
-                  <Button
-                    variant="success"
-                    icon="checkCircle"
-                    onClick={() => setStatus(open.id, 'approved', `${open.name} unblocked`)}
-                  >
-                    Unblock
-                  </Button>
-                ) : (
-                  <Button
-                    variant="danger"
-                    icon="ban"
-                    onClick={() => setStatus(open.id, 'blocked', `${open.name} blocked`)}
-                  >
-                    Block
-                  </Button>
-                )}
-              </>
-            )
+              ) : (
+                <Button
+                  variant="danger"
+                  icon="ban"
+                  disabled={busy}
+                  onClick={() => changeStatus(open._id, 'blocked', open.name)}
+                >
+                  Block
+                </Button>
+              )
+            ) : undefined
           }
         >
-          <div className="stack" style={{ gap: 18 }}>
-            <div className="profile-head">
-              <Identity name={open.name} meta={open.skills} size="lg" online={open.online} />
-              <div className="row" style={{ gap: 6 }}>
-                <StatusBadge status={open.status} />
-                <Badge tone={DOC_TONE[open.documents] || 'neutral'}>
-                  Documents · {open.documents}
-                </Badge>
+          {loadingDetail || !open ? (
+            <LoadingBlock />
+          ) : (
+            <div className="stack" style={{ gap: 18 }}>
+              <div className="profile-head">
+                <Identity
+                  name={open.name}
+                  meta={label(open.expertise) || open.email}
+                  size="lg"
+                  online={open.presence?.isOnline}
+                />
+                <div className="row" style={{ gap: 6 }}>
+                  <StatusBadge
+                    status={open.status === 'blocked' ? 'blocked' : open.applicationStatus}
+                  />
+                  <Badge tone={REVIEW_TONE[profile?.verification?.documentsStatus] || 'neutral'}>
+                    Documents · {profile?.verification?.documentsStatus || 'pending'}
+                  </Badge>
+                </div>
               </div>
-            </div>
 
-            <div className="mini-stats">
-              <div>
-                <p className="eyebrow">Consults</p>
-                <p className="mini-stats__value">{open.consults.toLocaleString('en-IN')}</p>
-              </div>
-              <div>
-                <p className="eyebrow">Rating</p>
-                <p className="mini-stats__value">{open.rating || '—'}</p>
-              </div>
-              <div>
-                <p className="eyebrow">Earnings</p>
-                <p className="mini-stats__value">₹{(open.earnings / 1000).toFixed(0)}k</p>
-              </div>
-              <div>
-                <p className="eyebrow">Payable</p>
-                <p className="mini-stats__value">₹{open.payable.toLocaleString('en-IN')}</p>
-              </div>
-            </div>
+              {open.createdVia === 'admin' && !open.profileCompletedAt && (
+                <Note tone="info" icon="info">
+                  This account was created from the panel. They complete their own profile —
+                  mobile number, expertise, languages and rates — after signing in with{' '}
+                  <strong>{open.email}</strong>. They are not listed to seekers until they
+                  have set a rate.
+                </Note>
+              )}
 
-            {open.status === 'approved' && (
-              <div className="availability-row">
+              <div className="mini-stats">
                 <div>
-                  <p className="toggle-row__title">Marketplace availability</p>
-                  <p className="toggle-row__desc">
-                    {open.online
-                      ? 'Listed as online — accepting chat and voice requests.'
-                      : 'Hidden from the online filter until they switch back on.'}
-                  </p>
+                  <p className="eyebrow">Consults</p>
+                  <p className="mini-stats__value">{count(open.metrics?.totalConsultations)}</p>
                 </div>
-                <Toggle on={open.online} onChange={() => toggleOnline(open.id)} label="Availability" />
+                <div>
+                  <p className="eyebrow">Rating</p>
+                  <p className="mini-stats__value">{open.metrics?.rating || '—'}</p>
+                </div>
+                <div>
+                  <p className="eyebrow">Earnings</p>
+                  <p className="mini-stats__value">{money(open.earnings?.lifetime)}</p>
+                </div>
+                <div>
+                  <p className="eyebrow">Payable</p>
+                  <p className="mini-stats__value">{money(open.earnings?.balance)}</p>
+                </div>
               </div>
-            )}
 
-            <section>
-              <h3 className="section-title">Profile</h3>
-              <DetailList
-                rows={[
-                  { label: 'Email', value: open.email },
-                  { label: 'Mobile', value: open.phone },
-                  { label: 'Expertise', value: open.skills },
-                  { label: 'Languages', value: open.languages },
-                  { label: 'Experience', value: `${open.experience} years` },
-                  { label: 'Availability', value: open.availability },
-                ]}
-              />
-            </section>
-
-            <section>
-              <h3 className="section-title">Rates &amp; commission</h3>
-              <DetailList
-                rows={[
-                  { label: 'Chat', value: `₹${open.chatRate} / min` },
-                  { label: 'Voice call', value: `₹${open.callRate} / min` },
-                  { label: 'Platform commission', value: `${open.commission}%` },
-                  {
-                    label: 'Astrologer share',
-                    value: `${100 - open.commission}% · ₹${Math.round(
-                      (open.chatRate * (100 - open.commission)) / 100,
-                    )}/min chat`,
-                  },
-                ]}
-              />
-            </section>
-
-            <section>
-              <h3 className="section-title">Verification documents</h3>
-              <div className="stack" style={{ gap: 8 }}>
-                {astrologerDocuments.map((doc) => {
-                  const state = open.status === 'approved' ? 'verified' : doc.state;
-                  return (
-                    <div className="doc-row" key={doc.label}>
-                      <span className="doc-row__icon">
-                        <Icon name="document" size={16} />
-                      </span>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <p className="strong truncate">{doc.label}</p>
-                        <p className="faint" style={{ fontSize: 11.5 }}>
-                          Uploaded {doc.uploaded}
-                        </p>
-                      </div>
-                      <Badge tone={DOC_TONE[state]}>
-                        {state[0].toUpperCase() + state.slice(1)}
-                      </Badge>
-                      <Button size="sm" icon="eye" aria-label="Open document" onClick={() => notify('Opening document')} />
-                    </div>
-                  );
-                })}
-              </div>
-            </section>
-
-            {open.rating > 0 && (
               <section>
-                <h3 className="section-title">Rating breakdown</h3>
-                <div className="stack" style={{ gap: 8 }}>
-                  {[
-                    { stars: 5, share: 78 },
-                    { stars: 4, share: 15 },
-                    { stars: 3, share: 5 },
-                    { stars: 2, share: 1 },
-                    { stars: 1, share: 1 },
-                  ].map((bucket) => (
-                    <div className="row" key={bucket.stars} style={{ gap: 10 }}>
-                      <span className="faint" style={{ width: 30, fontSize: 12 }}>
-                        {bucket.stars} ★
-                      </span>
-                      <span style={{ flex: 1 }}>
-                        <Progress value={bucket.share} tone="yellow" />
-                      </span>
-                      <span className="mono faint" style={{ width: 34, fontSize: 12 }}>
-                        {bucket.share}%
-                      </span>
-                    </div>
-                  ))}
-                </div>
+                <h3 className="section-title">Profile</h3>
+                <DetailList
+                  rows={[
+                    { label: 'Email', value: orDash(open.email) },
+                    { label: 'Mobile', value: open.phone?.number ? formatPhone(open.phone.number) : '—' },
+                    { label: 'Expertise', value: orDash(label(open.expertise)) },
+                    { label: 'Languages', value: orDash(label(open.languages)) },
+                    {
+                      label: 'Experience',
+                      value: open.experienceYears ? `${open.experienceYears} years` : '—',
+                    },
+                    { label: 'Availability', value: orDash(open.availabilityNote) },
+                  ]}
+                />
               </section>
-            )}
-          </div>
+
+              <section>
+                <h3 className="section-title">Rates &amp; commission</h3>
+                <DetailList
+                  rows={[
+                    ...(open.services || []).map((service) => ({
+                      label: label(service.type),
+                      value: service.isEnabled
+                        ? `${money(service.effectiveRate ?? service.ratePerMinute)} / min`
+                        : 'Switched off',
+                    })),
+                    ...(open.services?.length ? [] : [{ label: 'Rates', value: 'Not set yet' }]),
+                    { label: 'Platform commission', value: `${open.commissionPercent}%` },
+                    { label: 'Astrologer share', value: `${100 - open.commissionPercent}%` },
+                  ]}
+                />
+              </section>
+
+              {priceChanges.length > 0 && (
+                <section>
+                  <h3 className="section-title">Pending price changes</h3>
+                  <div className="stack" style={{ gap: 8 }}>
+                    {priceChanges.map((request) => (
+                      <div className="doc-row" key={request._id}>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <p className="strong truncate">
+                            {label(request.service)} · {money(request.oldRate)} →{' '}
+                            {money(request.requestedRate)}
+                          </p>
+                          <p className="faint" style={{ fontSize: 11.5 }}>
+                            {request.reason || 'No reason given'}
+                          </p>
+                        </div>
+                        {canManage && (
+                          <>
+                            <Button
+                              size="sm"
+                              variant="success"
+                              icon="check"
+                              onClick={() =>
+                                run(
+                                  () => reviewPriceChange(open._id, request._id, 'approved'),
+                                  { success: 'Price change approved', onDone: after },
+                                )
+                              }
+                            >
+                              Approve
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="danger"
+                              icon="x"
+                              onClick={() =>
+                                run(
+                                  () =>
+                                    reviewPriceChange(
+                                      open._id,
+                                      request._id,
+                                      'rejected',
+                                      'Not approved at this time.',
+                                    ),
+                                  { success: 'Price change rejected', onDone: after },
+                                )
+                              }
+                            >
+                              Reject
+                            </Button>
+                          </>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              )}
+
+              <section>
+                <h3 className="section-title">Verification documents</h3>
+                {documents.length === 0 ? (
+                  <p className="faint" style={{ fontSize: 12.5 }}>
+                    Nothing filed yet.
+                  </p>
+                ) : (
+                  <div className="stack" style={{ gap: 8 }}>
+                    {documents.map((doc) => (
+                      <div className="doc-row" key={doc._id}>
+                        <span className="doc-row__icon">
+                          <Icon name="document" size={16} />
+                        </span>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <p className="strong truncate">{label(doc.type)}</p>
+                          <p className="faint" style={{ fontSize: 11.5 }}>
+                            {doc.idNumber ? `${doc.idNumber} · ` : ''}
+                            {doc.file?.fileName || 'Uploaded'}
+                          </p>
+                        </div>
+                        <Badge tone={REVIEW_TONE[doc.status]}>{label(doc.status)}</Badge>
+                        {doc.file?.url && (
+                          <Button
+                            size="sm"
+                            icon="eye"
+                            aria-label="Open document"
+                            onClick={() => window.open(doc.file.url, '_blank', 'noopener')}
+                          />
+                        )}
+                        {canApprove && doc.status !== 'approved' && (
+                          <Button
+                            size="sm"
+                            variant="success"
+                            icon="check"
+                            onClick={() =>
+                              run(() => reviewDocument(open._id, doc._id, 'approved'), {
+                                success: 'Document approved',
+                                onDone: after,
+                              })
+                            }
+                          />
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
+
+              <section>
+                <h3 className="section-title">Bank accounts</h3>
+                {bankAccounts.length === 0 ? (
+                  <p className="faint" style={{ fontSize: 12.5 }}>
+                    No payout account on file yet.
+                  </p>
+                ) : (
+                  <div className="stack" style={{ gap: 8 }}>
+                    {bankAccounts.map((account) => (
+                      <div className="doc-row" key={account._id}>
+                        <span className="doc-row__icon">
+                          <Icon name="wallet" size={16} />
+                        </span>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <p className="strong truncate">{account.bankName}</p>
+                          <p className="faint" style={{ fontSize: 11.5 }}>
+                            {account.holderName} · ••••{String(account.accountNumber).slice(-4)} ·{' '}
+                            {account.ifsc}
+                          </p>
+                        </div>
+                        <Badge tone={REVIEW_TONE[account.status]}>{label(account.status)}</Badge>
+                        {canApprove && account.status !== 'approved' && (
+                          <Button
+                            size="sm"
+                            variant="success"
+                            icon="check"
+                            onClick={() =>
+                              run(() => reviewBankAccount(open._id, account._id, 'approved'), {
+                                success: 'Bank account approved',
+                                onDone: after,
+                              })
+                            }
+                          />
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
+
+              {open.metrics?.ratingCount > 0 && (
+                <section>
+                  <h3 className="section-title">Rating breakdown</h3>
+                  <div className="stack" style={{ gap: 8 }}>
+                    {[
+                      { stars: 5, value: open.metrics.ratingBreakdown?.five },
+                      { stars: 4, value: open.metrics.ratingBreakdown?.four },
+                      { stars: 3, value: open.metrics.ratingBreakdown?.three },
+                      { stars: 2, value: open.metrics.ratingBreakdown?.two },
+                      { stars: 1, value: open.metrics.ratingBreakdown?.one },
+                    ].map((bucket) => {
+                      const share = Math.round(
+                        ((bucket.value || 0) / open.metrics.ratingCount) * 100,
+                      );
+                      return (
+                        <div className="row" key={bucket.stars} style={{ gap: 10 }}>
+                          <span className="faint" style={{ width: 30, fontSize: 12 }}>
+                            {bucket.stars} ★
+                          </span>
+                          <span style={{ flex: 1 }}>
+                            <Progress value={share} tone="yellow" />
+                          </span>
+                          <span className="mono faint" style={{ width: 34, fontSize: 12 }}>
+                            {share}%
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </section>
+              )}
+            </div>
+          )}
         </Drawer>
+      )}
+
+      {approval && (
+        <Modal
+          title={`Approve ${approval.name}?`}
+          subtitle="Approving mints their astro code and publishes them to the marketplace"
+          onClose={() => setApproval(null)}
+          footer={
+            <>
+              <Button onClick={() => setApproval(null)}>Cancel</Button>
+              <Button
+                variant="primary"
+                icon="check"
+                disabled={busy || !(Number(approval.chatRate) > 0)}
+                onClick={submitApproval}
+              >
+                Approve &amp; publish
+              </Button>
+            </>
+          }
+        >
+          <div className="stack" style={{ gap: 16 }}>
+            <Note tone="info" icon="info">
+              An astrologer cannot take work without a rate, so their opening rates are set
+              here. Any change after this has to be requested by them and approved by you.
+            </Note>
+
+            <div className="grid grid--2" style={{ gap: 14 }}>
+              <Field label="Chat rate (₹ / min)">
+                <Input
+                  type="number"
+                  min="1"
+                  value={approval.chatRate}
+                  onChange={(event) =>
+                    setApproval((current) => ({ ...current, chatRate: event.target.value }))
+                  }
+                />
+              </Field>
+              <Field label="Call rate (₹ / min)">
+                <Input
+                  type="number"
+                  min="1"
+                  value={approval.callRate}
+                  onChange={(event) =>
+                    setApproval((current) => ({ ...current, callRate: event.target.value }))
+                  }
+                />
+              </Field>
+            </div>
+
+            <div className="grid grid--2" style={{ gap: 14 }}>
+              <Field label="Free minutes" hint="For a seeker's first consultation">
+                <Input
+                  type="number"
+                  min="0"
+                  value={approval.freeMinutes}
+                  onChange={(event) =>
+                    setApproval((current) => ({ ...current, freeMinutes: event.target.value }))
+                  }
+                />
+              </Field>
+              <Field
+                label="Platform commission (%)"
+                hint={`Astrologer keeps ${100 - (Number(approval.commission) || 0)}%`}
+              >
+                <Input
+                  type="number"
+                  min="0"
+                  max="100"
+                  value={approval.commission}
+                  onChange={(event) =>
+                    setApproval((current) => ({ ...current, commission: event.target.value }))
+                  }
+                />
+              </Field>
+            </div>
+          </div>
+        </Modal>
       )}
 
       {rejecting && (
         <Modal
           title={`Reject ${rejecting.name}?`}
-          subtitle="The applicant is notified by email and the profile is kept as blocked."
+          subtitle="The applicant is notified and can no longer sign in."
           onClose={() => {
             setRejecting(null);
             setReason('');
@@ -515,13 +793,8 @@ export function AstrologersPage({ notify }) {
               <Button
                 variant="danger"
                 icon="x"
-                disabled={reason.trim().length < 5}
-                onClick={() => {
-                  setStatus(rejecting.id, 'blocked', `${rejecting.name} rejected and blocked`);
-                  setRejecting(null);
-                  setReason('');
-                  setOpen(null);
-                }}
+                disabled={reason.trim().length < 5 || busy}
+                onClick={submitRejection}
               >
                 Reject application
               </Button>
@@ -530,8 +803,8 @@ export function AstrologersPage({ notify }) {
         >
           <div className="stack" style={{ gap: 14 }}>
             <Note tone="danger" icon="alert">
-              Rejection moves the application out of the queue and blocks the profile.
-              Uploaded documents are retained for 90 days as the verification policy requires.
+              Rejection moves the application out of the queue and stops them signing in. The
+              reason below is shown to them in the app.
             </Note>
             <label className="field__label" htmlFor="reject-reason">
               Reason for rejection
@@ -548,19 +821,13 @@ export function AstrologersPage({ notify }) {
 
       {draft && (
         <Modal
-          wide
           title="Create astrologer"
-          subtitle="Adds the profile directly — no application or invite step"
+          subtitle="Adds the account directly — no application step"
           onClose={() => setDraft(null)}
           footer={
             <>
               <Button onClick={() => setDraft(null)}>Cancel</Button>
-              <Button
-                variant="primary"
-                icon="check"
-                disabled={!draftValid}
-                onClick={createAstrologer}
-              >
+              <Button variant="primary" icon="check" disabled={!draftValid || busy} onClick={createFromForm}>
                 Create astrologer
               </Button>
             </>
@@ -568,26 +835,10 @@ export function AstrologersPage({ notify }) {
         >
           <div className="stack" style={{ gap: 16 }}>
             <Note tone="info" icon="info">
-              A profile created here skips document verification. Upload the verification
-              pack from the profile drawer once the astrologer sends it across.
+              The astrologer completes their own profile — name, mobile number, expertise,
+              languages, rates and availability — after signing in with this email. They are
+              not listed to seekers until they have set a rate.
             </Note>
-
-            <div className="grid grid--2" style={{ gap: 14 }}>
-              <Field label="Full name">
-                <Input
-                  placeholder="e.g. Pt. Rajesh Sharma"
-                  value={draft.name}
-                  onChange={setDraftField('name')}
-                />
-              </Field>
-              <Field label="Mobile number">
-                <Input
-                  placeholder="+91 98765 43210"
-                  value={draft.phone}
-                  onChange={setDraftField('phone')}
-                />
-              </Field>
-            </div>
 
             <Field label="Email address" hint="Used for the astrologer app sign-in">
               <Input
@@ -598,84 +849,24 @@ export function AstrologersPage({ notify }) {
               />
             </Field>
 
-            <div className="grid grid--2" style={{ gap: 14 }}>
-              <Field label="Expertise" hint="Comma separated — shown under the name">
-                <Input
-                  placeholder="Vedic Astrology, KP System"
-                  value={draft.skills}
-                  onChange={setDraftField('skills')}
-                />
-              </Field>
-              <Field label="Languages">
-                <Input
-                  placeholder="Hindi, English"
-                  value={draft.languages}
-                  onChange={setDraftField('languages')}
-                />
-              </Field>
-            </div>
-
-            <div className="grid grid--3" style={{ gap: 14 }}>
-              <Field label="Experience (years)">
-                <Input
-                  type="number"
-                  min="0"
-                  placeholder="12"
-                  value={draft.experience}
-                  onChange={setDraftField('experience')}
-                />
-              </Field>
-              <Field label="Chat rate (₹ / min)">
-                <Input
-                  type="number"
-                  min="1"
-                  placeholder="20"
-                  value={draft.chatRate}
-                  onChange={setDraftField('chatRate')}
-                />
-              </Field>
-              <Field label="Call rate (₹ / min)">
-                <Input
-                  type="number"
-                  min="1"
-                  placeholder="28"
-                  value={draft.callRate}
-                  onChange={setDraftField('callRate')}
-                />
-              </Field>
-            </div>
-
-            <div className="grid grid--2" style={{ gap: 14 }}>
-              <Field
-                label="Platform commission (%)"
-                hint={`Astrologer keeps ${100 - (Number(draft.commission) || 0)}%`}
-              >
-                <Input
-                  type="number"
-                  min="0"
-                  max="100"
-                  value={draft.commission}
-                  onChange={setDraftField('commission')}
-                />
-              </Field>
-              <Field label="Availability">
-                <Input
-                  placeholder="Mon–Sat · 9 AM – 9 PM"
-                  value={draft.availability}
-                  onChange={setDraftField('availability')}
-                />
-              </Field>
-            </div>
+            <Field
+              label="Platform commission (%)"
+              hint={`Astrologer keeps ${100 - (Number(draft.commission) || 0)}%`}
+            >
+              <Input
+                type="number"
+                min="0"
+                max="100"
+                value={draft.commission}
+                onChange={setDraftField('commission')}
+              />
+            </Field>
 
             <Field
               label="Status"
               hint="Approved profiles appear in the apps straight away; blocked ones stay hidden"
             >
-              <Select
-                value={draft.status}
-                onChange={setDraftField('status')}
-                options={LISTING_STATUS}
-              />
+              <Select value={draft.status} onChange={setDraftField('status')} options={LISTING_STATUS} />
             </Field>
           </div>
         </Modal>

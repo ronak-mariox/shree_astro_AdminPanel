@@ -1,16 +1,17 @@
 /**
- * Content Management — the astrology article library, with the create /
- * publish / categorise / visibility controls the FRD calls for.
+ * Content Management — the article library the apps read.
+ *
+ * A draft is invisible to the apps until it is published, which is what makes
+ * the status column the important one on this page.
  */
 
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { DataTable, RowActions } from '../components/DataTable';
 import { Icon } from '../components/Icon';
 import { PageHeader } from '../components/Shell';
 import {
   Badge,
   Button,
-  Card,
   Chips,
   Field,
   Input,
@@ -21,86 +22,87 @@ import {
   StatusBadge,
   Textarea,
 } from '../components/ui';
-import { articles as seed, contentCategories } from '../data/content';
+import { useAction, useApi } from '../hooks/useApi';
+import {
+  createArticle,
+  deleteArticle,
+  listArticles,
+  updateArticle,
+} from '../services/admin';
+import { can } from '../services/session';
+import { count, date, label } from '../utils/format';
 
 const STATUSES = [
   { key: 'all', label: 'All' },
   { key: 'published', label: 'Published' },
   { key: 'draft', label: 'Drafts' },
-  { key: 'review', label: 'In review' },
   { key: 'archived', label: 'Archived' },
 ];
 
-const emptyDraft = {
+/** The categories the app's content list groups by. */
+const CATEGORIES = [
+  'Astrology Basics',
+  'Kundli & Charts',
+  'Doshas & Remedies',
+  'Festivals & Muhurat',
+  'Gemstones',
+];
+
+const BLANK = {
   title: '',
-  category: 'Astrology Basics',
-  author: 'Pt. Rajesh Sharma',
-  visibility: 'Everyone',
+  category: CATEGORIES[0],
+  author: '',
+  visibility: 'everyone',
   excerpt: '',
   body: '',
 };
 
+const PAGE_LIMIT = 100;
+
 export function ContentPage({ notify }) {
-  const [rows, setRows] = useState(seed);
   const [status, setStatus] = useState('all');
-  const [category, setCategory] = useState('All');
   const [editing, setEditing] = useState(null);
+  const [run, busy] = useAction(notify);
 
-  const counts = useMemo(
-    () =>
-      STATUSES.reduce(
-        (acc, item) => ({
-          ...acc,
-          [item.key]:
-            item.key === 'all' ? rows.length : rows.filter((row) => row.status === item.key).length,
-        }),
-        {},
-      ),
-    [rows],
+  const { data, loading, error, reload } = useApi(
+    () => listArticles({ status: status === 'all' ? undefined : status, limit: PAGE_LIMIT }),
+    [status],
   );
 
-  const filtered = useMemo(
-    () =>
-      rows.filter(
-        (row) =>
-          (status === 'all' || row.status === status) &&
-          (category === 'All' || row.category === category),
-      ),
-    [rows, status, category],
-  );
-
-  const setRowStatus = (id, next, message) => {
-    setRows((current) =>
-      current.map((row) => (row.id === id ? { ...row, status: next } : row)),
-    );
-    notify(message, { tone: next === 'published' ? 'success' : undefined });
-  };
+  const rows = data?.items ?? [];
+  const canManage = can('content.manage');
 
   const save = (publish) => {
-    const draft = editing;
-    if (draft.id) {
-      setRows((current) =>
-        current.map((row) =>
-          row.id === draft.id
-            ? { ...row, ...draft, status: publish ? 'published' : row.status, updated: '17 Aug 2026' }
-            : row,
-        ),
-      );
-    } else {
-      setRows((current) => [
-        {
-          ...draft,
-          id: `ct-${32 + current.length}`,
-          status: publish ? 'published' : 'draft',
-          views: 0,
-          updated: '17 Aug 2026',
-        },
-        ...current,
-      ]);
-    }
-    setEditing(null);
-    notify(publish ? 'Article published' : 'Draft saved', { tone: publish ? 'success' : undefined });
+    const body = {
+      title: editing.title.trim(),
+      category: editing.category,
+      author: editing.author.trim(),
+      visibility: editing.visibility,
+      excerpt: editing.excerpt.trim(),
+      body: editing.body,
+      ...(publish ? { status: 'published' } : {}),
+    };
+
+    return run(() => (editing._id ? updateArticle(editing._id, body) : createArticle(body)), {
+      success: publish ? 'Article published' : 'Draft saved',
+      onDone: async () => {
+        setEditing(null);
+        await reload();
+      },
+    });
   };
+
+  const remove = (article) =>
+    run(() => deleteArticle(article._id), {
+      success: 'Article deleted',
+      onDone: reload,
+    });
+
+  const setStatusOf = (article, next) =>
+    run(() => updateArticle(article._id, { status: next }), {
+      success: next === 'published' ? 'Article published' : 'Article archived',
+      onDone: reload,
+    });
 
   const columns = [
     {
@@ -120,13 +122,13 @@ export function ContentPage({ notify }) {
       key: 'category',
       label: 'Category',
       sortable: true,
-      render: (row) => <Badge tone="neutral">{row.category}</Badge>,
+      render: (row) => <Badge tone="neutral">{row.category || 'Uncategorised'}</Badge>,
     },
     {
       key: 'author',
       label: 'Author',
       sortable: true,
-      render: (row) => <span className="nowrap">{row.author}</span>,
+      render: (row) => <span className="nowrap">{row.author || '—'}</span>,
     },
     {
       key: 'visibility',
@@ -134,8 +136,8 @@ export function ContentPage({ notify }) {
       sortable: true,
       render: (row) => (
         <span className="row" style={{ gap: 6, fontSize: 12.5 }}>
-          <Icon name={row.visibility === 'Hidden' ? 'eyeOff' : 'eye'} size={14} />
-          {row.visibility}
+          <Icon name={row.visibility === 'users' ? 'eyeOff' : 'eye'} size={14} />
+          {row.visibility === 'users' ? 'Signed-in users' : 'Everyone'}
         </span>
       ),
     },
@@ -144,13 +146,14 @@ export function ContentPage({ notify }) {
       label: 'Views',
       align: 'right',
       sortable: true,
-      render: (row) => <span className="mono">{row.views.toLocaleString('en-IN')}</span>,
+      render: (row) => <span className="mono">{count(row.views)}</span>,
     },
     {
-      key: 'updated',
+      key: 'updatedAt',
       label: 'Updated',
       sortable: true,
-      render: (row) => <span className="nowrap">{row.updated}</span>,
+      sortValue: (row) => new Date(row.updatedAt).getTime(),
+      render: (row) => <span className="nowrap">{date(row.updatedAt)}</span>,
     },
     {
       key: 'status',
@@ -162,25 +165,27 @@ export function ContentPage({ notify }) {
       key: 'actions',
       label: '',
       align: 'actions',
-      render: (row) => (
-        <RowActions
-          actions={[
-            { label: 'Edit', icon: 'edit', onClick: () => setEditing(row) },
-            row.status === 'published'
-              ? {
-                  label: 'Unpublish',
-                  icon: 'eyeOff',
-                  onClick: () => setRowStatus(row.id, 'archived', 'Article archived'),
-                }
-              : {
-                  label: 'Publish',
-                  icon: 'check',
-                  variant: 'success',
-                  onClick: () => setRowStatus(row.id, 'published', 'Article published'),
-                },
-          ]}
-        />
-      ),
+      render: (row) =>
+        canManage ? (
+          <RowActions
+            actions={[
+              { label: 'Edit', icon: 'edit', onClick: () => setEditing(row) },
+              row.status === 'published'
+                ? {
+                    label: 'Archive',
+                    icon: 'eyeOff',
+                    onClick: () => setStatusOf(row, 'archived'),
+                  }
+                : {
+                    label: 'Publish',
+                    icon: 'check',
+                    variant: 'success',
+                    onClick: () => setStatusOf(row, 'published'),
+                  },
+              { label: 'Delete', icon: 'trash', variant: 'danger', onClick: () => remove(row) },
+            ]}
+          />
+        ) : null,
     },
   ];
 
@@ -188,72 +193,82 @@ export function ContentPage({ notify }) {
     <div className="page">
       <PageHeader
         title="Content Management"
-        subtitle="Articles and guides published into the customer app's content library"
+        subtitle="Articles the apps read — drafts stay invisible until published"
         actions={
           <>
-            <Button icon="upload">Import</Button>
-            <Button variant="primary" icon="plus" onClick={() => setEditing({ ...emptyDraft })}>
-              New article
-            </Button>
+            <Button icon="refresh" onClick={reload}>Refresh</Button>
+            {canManage && (
+              <Button variant="primary" icon="plus" onClick={() => setEditing({ ...BLANK })}>
+                New article
+              </Button>
+            )}
           </>
         }
       />
 
       <div className="grid grid--stats" style={{ marginBottom: 16 }}>
-        <StatCard label="Published articles" value={counts.published} icon="file" tone="brand" delta="+3" hint="this month" />
-        <StatCard label="Total reads" value="82.8k" icon="eye" tone="success" delta="+11.4%" hint="last 30 days" />
-        <StatCard label="Awaiting review" value={counts.review} icon="inbox" tone="yellow" delta="1 new" deltaTone="flat" hint="submitted by astrologers" />
-        <StatCard label="Avg. read time" value="3m 12s" icon="clock" delta="+18s" hint="per article" />
-      </div>
-
-      <div className="row row--wrap" style={{ marginBottom: 14, gap: 10 }}>
-        <Chips
-          value={status}
-          onChange={setStatus}
-          items={STATUSES.map((item) => ({ ...item, count: counts[item.key] }))}
+        <StatCard
+          label="Articles"
+          value={count(data?.total ?? 0)}
+          icon="file"
+          tone="brand"
+          hint="in this view"
         />
-        <div style={{ marginLeft: 'auto', minWidth: 200 }}>
-          <Select
-            value={category}
-            onChange={(event) => setCategory(event.target.value)}
-            options={contentCategories}
-          />
-        </div>
+        <StatCard
+          label="Published"
+          value={count(rows.filter((row) => row.status === 'published').length)}
+          icon="check"
+          tone="success"
+          hint="live in the apps"
+        />
+        <StatCard
+          label="Drafts"
+          value={count(rows.filter((row) => row.status === 'draft').length)}
+          icon="edit"
+          tone="yellow"
+          hint="not visible yet"
+        />
+        <StatCard
+          label="Total views"
+          value={count(rows.reduce((sum, row) => sum + (row.views || 0), 0))}
+          icon="eye"
+          hint="all time"
+        />
       </div>
 
       <DataTable
         columns={columns}
-        rows={filtered}
-        searchKeys={['title', 'author', 'category']}
-        searchPlaceholder="Search the content library…"
-        onRowClick={setEditing}
-        empty={{
-          icon: 'file',
-          title: 'Nothing here yet',
-          desc: 'Publish an article and it appears in the app’s content library within a minute.',
-        }}
+        rows={rows}
+        loading={loading}
+        error={error}
+        onRetry={reload}
+        searchKeys={['title', 'category', 'author', 'excerpt']}
+        searchPlaceholder="Search by title, author or category…"
+        onRowClick={canManage ? setEditing : undefined}
+        toolbar={<Chips value={status} onChange={setStatus} items={STATUSES} />}
+        empty={{ icon: 'file', title: 'No articles in this view' }}
       />
 
       {editing && (
         <Modal
           wide
-          title={editing.id ? 'Edit article' : 'New article'}
+          title={editing._id ? 'Edit article' : 'New article'}
           subtitle={
-            editing.id
-              ? `${editing.id} · last updated ${editing.updated}`
-              : 'Published content reaches every user of the customer app'
+            editing._id
+              ? `${label(editing.status)} · updated ${date(editing.updatedAt)}`
+              : 'Saved as a draft until you publish it'
           }
           onClose={() => setEditing(null)}
           footer={
             <>
               <Button onClick={() => setEditing(null)}>Cancel</Button>
-              <Button onClick={() => save(false)} disabled={!editing.title.trim()}>
+              <Button disabled={busy || !editing.title.trim()} onClick={() => save(false)}>
                 Save draft
               </Button>
               <Button
                 variant="primary"
                 icon="check"
-                disabled={!editing.title.trim() || !editing.excerpt.trim()}
+                disabled={busy || !editing.title.trim()}
                 onClick={() => save(true)}
               >
                 Publish
@@ -272,47 +287,44 @@ export function ContentPage({ notify }) {
               />
             </Field>
 
-            <div className="grid grid--3" style={{ gap: 14 }}>
+            <div className="grid grid--2" style={{ gap: 14 }}>
               <Field label="Category">
                 <Select
                   value={editing.category}
                   onChange={(event) =>
                     setEditing((current) => ({ ...current, category: event.target.value }))
                   }
-                  options={contentCategories.filter((item) => item !== 'All')}
+                  options={CATEGORIES.map((name) => ({ value: name, label: name }))}
                 />
               </Field>
               <Field label="Author">
-                <Select
-                  value={editing.author}
+                <Input
+                  placeholder="e.g. Pt. Rajesh Sharma"
+                  value={editing.author || ''}
                   onChange={(event) =>
                     setEditing((current) => ({ ...current, author: event.target.value }))
                   }
-                  options={[
-                    'Pt. Rajesh Sharma',
-                    'Kavita Joshi',
-                    'Dr. Suresh Menon',
-                    'Guru Prasad Shastri',
-                    'Anita Deshpande',
-                    'Editorial team',
-                  ]}
-                />
-              </Field>
-              <Field label="Visibility">
-                <Select
-                  value={editing.visibility}
-                  onChange={(event) =>
-                    setEditing((current) => ({ ...current, visibility: event.target.value }))
-                  }
-                  options={['Everyone', 'Premium', 'Hidden']}
                 />
               </Field>
             </div>
 
+            <Field label="Visibility">
+              <Select
+                value={editing.visibility}
+                onChange={(event) =>
+                  setEditing((current) => ({ ...current, visibility: event.target.value }))
+                }
+                options={[
+                  { value: 'everyone', label: 'Everyone — including signed-out visitors' },
+                  { value: 'users', label: 'Signed-in users only' },
+                ]}
+              />
+            </Field>
+
             <Field label="Summary" hint="Shown on the card in the app's content list">
               <Textarea
-                placeholder="One or two sentences describing what the reader will learn."
-                value={editing.excerpt}
+                placeholder="One or two sentences."
+                value={editing.excerpt || ''}
                 onChange={(event) =>
                   setEditing((current) => ({ ...current, excerpt: event.target.value }))
                 }
@@ -321,8 +333,8 @@ export function ContentPage({ notify }) {
 
             <Field label="Body">
               <Textarea
-                style={{ minHeight: 160 }}
-                placeholder="Write the article. Markdown is supported."
+                rows={10}
+                placeholder="The full article."
                 value={editing.body || ''}
                 onChange={(event) =>
                   setEditing((current) => ({ ...current, body: event.target.value }))
@@ -330,22 +342,9 @@ export function ContentPage({ notify }) {
               />
             </Field>
 
-            <Card title="Cover image" subtitle="Optional · 16:9, at least 1200 × 675">
-              <div className="dropzone">
-                <span className="dropzone__icon">
-                  <Icon name="image" size={20} />
-                </span>
-                <p className="strong">Drop an image or browse</p>
-                <p className="faint" style={{ fontSize: 11.5 }}>
-                  JPG or PNG up to 2 MB
-                </p>
-              </div>
-            </Card>
-
-            {editing.status === 'review' && (
+            {editing._id && editing.status === 'published' && (
               <Note tone="info" icon="info">
-                Submitted by <strong>{editing.author}</strong> for editorial review.
-                Publishing makes it visible in the app immediately.
+                This article is live in the apps. Saving keeps it published.
               </Note>
             )}
           </div>

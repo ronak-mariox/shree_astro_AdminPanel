@@ -10,10 +10,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { BrandMark, Icon } from '../components/Icon';
 import { Button, Checkbox, Field, Input, Note } from '../components/ui';
+import { completeSignIn, resendOtp, signIn, verifyOtp } from '../services/admin';
 
-const DEMO = { email: 'admin@shreeastro.com', password: 'shreeastro' };
+/** Seeded by `npm run seed:admin`; shown as a hint on the form. */
+const SEEDED = { email: 'admin@shreeastro.com', password: 'admin@123' };
 const OTP_LENGTH = 6;
-const RESEND_SECONDS = 30;
 
 /** A fixed scatter of stars — seeded so the field does not twitch on re-render. */
 const STARS = [
@@ -130,14 +131,19 @@ function OtpBoxes({ value, onChange, invalid }) {
 
 export function LoginPage({ onAuthenticated }) {
   const [step, setStep] = useState('credentials');
-  const [email, setEmail] = useState(DEMO.email);
+  const [email, setEmail] = useState(SEEDED.email);
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [remember, setRemember] = useState(true);
   const [otp, setOtp] = useState('');
   const [errors, setErrors] = useState({});
   const [busy, setBusy] = useState(false);
-  const [seconds, setSeconds] = useState(RESEND_SECONDS);
+  const [seconds, setSeconds] = useState(0);
+  /**
+   * The real code, which the API returns while there is no mail transport
+   * wired up. Never present in production — see deliverOtp on the server.
+   */
+  const [devCode, setDevCode] = useState(null);
 
   useEffect(() => {
     if (step !== 'otp' || seconds === 0) return undefined;
@@ -151,36 +157,73 @@ export function LoginPage({ onAuthenticated }) {
     return `${name.slice(0, 2)}${'•'.repeat(Math.max(name.length - 2, 2))}@${domain}`;
   }, [email]);
 
-  const submitCredentials = (event) => {
+  /**
+   * Step one. The API checks the password and, when two-factor is on, sends a
+   * code and answers `requiresOtp` instead of a session. With it switched off
+   * the session comes straight back and there is no second step.
+   */
+  const submitCredentials = async (event) => {
     event.preventDefault();
+
     const next = {};
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) next.email = 'Enter a valid email address';
     if (password.length < 6) next.password = 'Password must be at least 6 characters';
-    if (password && password !== DEMO.password && !next.password) {
-      next.password = 'That password does not match our records';
-    }
     setErrors(next);
     if (Object.keys(next).length) return;
 
     setBusy(true);
-    setTimeout(() => {
-      setBusy(false);
+    try {
+      const result = await signIn(email.trim(), password);
+
+      if (!result.requiresOtp) {
+        completeSignIn(result);
+        onAuthenticated(result.admin);
+        return;
+      }
+
       setStep('otp');
-      setSeconds(RESEND_SECONDS);
-    }, 650);
+      setOtp('');
+      setSeconds(result.resendInSeconds || 30);
+      setDevCode(result.devCode || null);
+    } catch (error) {
+      /** The API answers the same way for a wrong email and a wrong password. */
+      setErrors({ password: error.message });
+    } finally {
+      setBusy(false);
+    }
   };
 
-  const submitOtp = (event) => {
+  /** Step two: the code from the admin's inbox. */
+  const submitOtp = async (event) => {
     event.preventDefault();
+
     if (otp.length < OTP_LENGTH) {
       setErrors({ otp: 'Enter all six digits' });
       return;
     }
+
     setBusy(true);
-    setTimeout(() => {
+    try {
+      const session = await verifyOtp(email.trim(), otp);
+      onAuthenticated(session.admin);
+    } catch (error) {
+      setErrors({ otp: error.message });
+    } finally {
       setBusy(false);
-      onAuthenticated();
-    }, 650);
+    }
+  };
+
+  const resend = async () => {
+    if (seconds > 0) return;
+    try {
+      const sent = await resendOtp(email.trim());
+      setSeconds(sent.resendInSeconds || 30);
+      setDevCode(sent.devCode || null);
+      setOtp('');
+      setErrors({});
+    } catch (error) {
+      setErrors({ otp: error.message });
+    }
   };
 
   return (
@@ -261,7 +304,7 @@ export function LoginPage({ onAuthenticated }) {
               </div>
 
               <p className="login__hint">
-                Demo credentials — <strong>{DEMO.email}</strong> / <strong>{DEMO.password}</strong>
+                Seeded by <strong>npm run seed:admin</strong> — {SEEDED.email} / {SEEDED.password}
               </p>
             </form>
           ) : (
@@ -302,7 +345,7 @@ export function LoginPage({ onAuthenticated }) {
                     className="login__link"
                     disabled={seconds > 0}
                     style={{ opacity: seconds > 0 ? 0.45 : 1 }}
-                    onClick={() => setSeconds(RESEND_SECONDS)}
+                    onClick={resend}
                   >
                     Resend OTP
                   </button>
@@ -312,10 +355,13 @@ export function LoginPage({ onAuthenticated }) {
                   {busy ? 'Signing in…' : 'Verify & sign in'}
                 </Button>
 
-                <Note tone="info" icon="info">
-                  Any six digits work in this prototype — the real console will read the
-                  code from the authentication API.
-                </Note>
+                {devCode && (
+                  <Note tone="info" icon="info">
+                    No mail transport is wired up yet, so the code is{' '}
+                    <strong>{devCode}</strong>. It is also printed to the server log,
+                    and is never returned in production.
+                  </Note>
+                )}
               </div>
             </form>
           )}

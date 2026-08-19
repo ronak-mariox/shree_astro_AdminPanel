@@ -1,9 +1,12 @@
 /**
- * Payment Management — the Razorpay ledger: captured, processing, failed and
- * refunded orders, with the verification detail behind each payment id.
+ * Payment Management — the money ledger: top-ups, consultation charges,
+ * astrologer earnings, refunds and payouts, with the detail behind each one.
+ *
+ * A refund never edits the row it reverses. It posts a new credit, because the
+ * ledger is a history and history does not change.
  */
 
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { DataTable, RowActions } from '../components/DataTable';
 import { Icon } from '../components/Icon';
 import { PageHeader } from '../components/Shell';
@@ -13,79 +16,100 @@ import {
   Chips,
   DetailList,
   Drawer,
-  Identity,
   Modal,
   Note,
   StatCard,
   StatusBadge,
+  Textarea,
   Timeline,
 } from '../components/ui';
-import { payments as seed } from '../data/operations';
+import { useAction, useApi } from '../hooks/useApi';
+import { getDashboard, listTransactions, refundTransaction } from '../services/admin';
+import { can } from '../services/session';
+import { dateTime, label, money } from '../utils/format';
 
+/** Every kind of movement, and what an admin usually wants to look at. */
 const FILTERS = [
   { key: 'all', label: 'All' },
-  { key: 'captured', label: 'Captured' },
-  { key: 'processing', label: 'Processing' },
-  { key: 'failed', label: 'Failed' },
-  { key: 'refunded', label: 'Refunded' },
+  { key: 'topup', label: 'Top-ups' },
+  { key: 'consultation_charge', label: 'Charges' },
+  { key: 'consultation_earning', label: 'Earnings' },
+  { key: 'refund', label: 'Refunds' },
+  { key: 'withdrawal', label: 'Payouts' },
 ];
 
-const METHOD_ICON = { UPI: 'zap', Card: 'card', Netbanking: 'globe', Wallet: 'wallet' };
+const TYPE_ICON = {
+  topup: 'card',
+  consultation_charge: 'chat',
+  consultation_earning: 'sparkle',
+  refund: 'refresh',
+  withdrawal: 'wallet',
+  adjustment: 'edit',
+};
+
+const PAGE_LIMIT = 100;
 
 export function PaymentsPage({ notify }) {
   const [filter, setFilter] = useState('all');
   const [open, setOpen] = useState(null);
   const [refunding, setRefunding] = useState(null);
+  const [reason, setReason] = useState('');
+  const [run, busy] = useAction(notify);
 
-  const counts = useMemo(
-    () =>
-      FILTERS.reduce(
-        (acc, item) => ({
-          ...acc,
-          [item.key]:
-            item.key === 'all' ? seed.length : seed.filter((row) => row.status === item.key).length,
-        }),
-        {},
-      ),
-    [],
+  const { data, loading, error, reload } = useApi(
+    () => listTransactions({ type: filter === 'all' ? undefined : filter, limit: PAGE_LIMIT }),
+    [filter],
   );
+  const { data: stats } = useApi(() => getDashboard(7), []);
 
-  const filtered = filter === 'all' ? seed : seed.filter((row) => row.status === filter);
-  const captured = seed
-    .filter((row) => row.status === 'captured')
-    .reduce((sum, row) => sum + row.amount, 0);
+  const rows = data?.items ?? [];
+  const canRefund = can('payments.refund');
+
+  const submitRefund = () =>
+    run(() => refundTransaction(refunding._id, reason.trim() || 'Refunded by an admin'), {
+      success: `${money(refunding.amount)} refunded`,
+      onDone: async () => {
+        setRefunding(null);
+        setReason('');
+        setOpen(null);
+        await reload();
+      },
+    });
 
   const columns = [
     {
-      key: 'id',
-      label: 'Payment ID',
-      sortable: true,
+      key: 'reference',
+      label: 'Reference',
       render: (row) => (
-        <div>
-          <p className="strong mono" style={{ fontSize: 12 }}>
-            {row.id}
-          </p>
-          <p className="faint" style={{ fontSize: 11 }}>
-            {row.orderId}
-          </p>
-        </div>
+        <span className="mono" style={{ fontSize: 12 }}>
+          {row.reference}
+        </span>
       ),
     },
     {
-      key: 'user',
-      label: 'Paid by',
-      sortable: true,
-      render: (row) => <Identity name={row.user} meta={row.purpose} size="sm" />,
-    },
-    {
-      key: 'method',
-      label: 'Method',
+      key: 'type',
+      label: 'Type',
       sortable: true,
       render: (row) => (
         <span className="row" style={{ gap: 6, fontSize: 12.5 }}>
-          <Icon name={METHOD_ICON[row.method] || 'card'} size={14} />
-          {row.method}
+          <Icon name={TYPE_ICON[row.type] || 'rupee'} size={14} />
+          {label(row.type)}
         </span>
+      ),
+    },
+    {
+      key: 'title',
+      label: 'Description',
+      render: (row) => <span className="truncate">{row.title || label(row.type)}</span>,
+    },
+    {
+      key: 'ownerRole',
+      label: 'Wallet',
+      sortable: true,
+      render: (row) => (
+        <Badge tone={row.ownerRole === 'astrologer' ? 'lilac' : 'info'}>
+          {label(row.ownerRole)}
+        </Badge>
       ),
     },
     {
@@ -93,27 +117,25 @@ export function PaymentsPage({ notify }) {
       label: 'Amount',
       align: 'right',
       sortable: true,
-      render: (row) => <span className="mono strong">₹{row.amount.toLocaleString('en-IN')}</span>,
+      render: (row) => (
+        <span className={`mono strong ${row.direction === 'credit' ? 'amount-credit' : 'amount-debit'}`}>
+          {row.direction === 'credit' ? '+' : '−'} {money(row.amount)}
+        </span>
+      ),
     },
     {
-      key: 'fee',
-      label: 'Gateway fee',
+      key: 'balanceAfter',
+      label: 'Balance after',
       align: 'right',
       sortable: true,
-      render: (row) => <span className="mono faint">₹{row.fee.toFixed(2)}</span>,
+      render: (row) => <span className="mono">{money(row.balanceAfter)}</span>,
     },
     {
-      key: 'net',
-      label: 'Net',
-      align: 'right',
-      sortable: true,
-      render: (row) => <span className="mono">₹{row.net.toLocaleString('en-IN')}</span>,
-    },
-    {
-      key: 'at',
+      key: 'createdAt',
       label: 'When',
       sortable: true,
-      render: (row) => <span className="nowrap">{row.at}</span>,
+      sortValue: (row) => new Date(row.createdAt).getTime(),
+      render: (row) => dateTime(row.createdAt),
     },
     {
       key: 'status',
@@ -129,8 +151,15 @@ export function PaymentsPage({ notify }) {
         <RowActions
           actions={[
             { label: 'View', icon: 'eye', onClick: () => setOpen(row) },
-            ...(row.status === 'captured'
-              ? [{ label: 'Refund', icon: 'refresh', variant: 'danger', onClick: () => setRefunding(row) }]
+            ...(canRefund && row.direction === 'debit' && row.status === 'success'
+              ? [
+                  {
+                    label: 'Refund',
+                    icon: 'refresh',
+                    variant: 'danger',
+                    onClick: () => setRefunding(row),
+                  },
+                ]
               : []),
           ]}
         />
@@ -142,67 +171,75 @@ export function PaymentsPage({ notify }) {
     <div className="page">
       <PageHeader
         title="Payment Management"
-        subtitle="Razorpay orders, settlements and refunds"
-        actions={
-          <>
-            <Button icon="refresh" onClick={() => notify('Reconciled with Razorpay')}>
-              Reconcile
-            </Button>
-            <Button variant="primary" icon="download">
-              Settlement report
-            </Button>
-          </>
-        }
+        subtitle="Every movement of money on the platform, and the detail behind each one"
+        actions={<Button icon="refresh" onClick={reload}>Refresh</Button>}
       />
 
       <div className="grid grid--stats" style={{ marginBottom: 16 }}>
-        <StatCard label="Collected (MTD)" value="₹18.4L" icon="rupee" tone="success" delta="+15.7%" hint="net of fees" />
-        <StatCard label="Captured today" value={`₹${captured.toLocaleString('en-IN')}`} icon="card" tone="brand" delta="+₹4,200" hint="12 orders" />
-        <StatCard label="Failure rate" value="3.8%" icon="alert" tone="yellow" delta="-0.6%" deltaTone="up" hint="last 7 days" />
-        <StatCard label="Refunds issued" value="₹1,100" icon="refresh" delta="2 orders" deltaTone="flat" hint="this month" />
+        <StatCard
+          label="Collected this month"
+          value={money(stats?.revenue?.chargedThisMonth ?? 0)}
+          icon="card"
+          tone="success"
+          hint="charged to wallets"
+        />
+        <StatCard
+          label="Paid to astrologers"
+          value={money(stats?.revenue?.paidToAstrologers ?? 0)}
+          icon="sparkle"
+          tone="yellow"
+          hint="their share"
+        />
+        <StatCard
+          label="Platform revenue"
+          value={money(stats?.revenue?.platformThisMonth ?? 0)}
+          icon="rupee"
+          tone="brand"
+          hint="after commission"
+        />
+        <StatCard
+          label="Rows in this view"
+          value={data?.total ?? 0}
+          icon="file"
+          hint={label(filter === 'all' ? 'everything' : filter)}
+        />
       </div>
 
       <DataTable
         columns={columns}
-        rows={filtered}
-        searchKeys={['id', 'orderId', 'user', 'method']}
-        searchPlaceholder="Search by payment id, order id or user…"
+        rows={rows}
+        loading={loading}
+        error={error}
+        onRetry={reload}
+        searchKeys={['reference', 'title']}
+        searchPlaceholder="Search by reference or description…"
         onRowClick={setOpen}
-        toolbar={
-          <Chips
-            value={filter}
-            onChange={setFilter}
-            items={FILTERS.map((item) => ({ ...item, count: counts[item.key] }))}
-          />
-        }
+        toolbar={<Chips value={filter} onChange={setFilter} items={FILTERS} />}
         empty={{ icon: 'card', title: 'No payments in this view' }}
       />
 
       {open && (
         <Drawer
           title="Payment detail"
-          subtitle={open.id}
+          subtitle={open.reference}
           onClose={() => setOpen(null)}
           footer={
-            <>
-              <Button icon="copy" onClick={() => notify('Payment ID copied')}>
-                Copy ID
+            canRefund && open.direction === 'debit' && open.status === 'success' ? (
+              <Button variant="danger" icon="refresh" onClick={() => setRefunding(open)}>
+                Refund
               </Button>
-              {open.status === 'captured' && (
-                <Button variant="danger" icon="refresh" onClick={() => setRefunding(open)}>
-                  Refund
-                </Button>
-              )}
-            </>
+            ) : undefined
           }
         >
           <div className="stack" style={{ gap: 18 }}>
             <div className="amount-hero">
               <p className="eyebrow">Amount</p>
-              <p className="amount-hero__value">₹{open.amount.toLocaleString('en-IN')}</p>
+              <p className="amount-hero__value">
+                {open.direction === 'credit' ? '+' : '−'} {money(open.amount)}
+              </p>
               <div className="row" style={{ gap: 8, justifyContent: 'center' }}>
                 <StatusBadge status={open.status} />
-                <Badge tone="neutral">{open.method}</Badge>
+                <Badge tone="neutral">{label(open.type)}</Badge>
               </div>
             </div>
 
@@ -210,61 +247,56 @@ export function PaymentsPage({ notify }) {
               <h3 className="section-title">Transaction</h3>
               <DetailList
                 rows={[
-                  { label: 'Payment ID', value: open.id },
-                  { label: 'Order ID', value: open.orderId },
-                  { label: 'Paid by', value: open.user },
-                  { label: 'Purpose', value: open.purpose },
-                  { label: 'Captured at', value: open.at },
+                  { label: 'Reference', value: open.reference },
+                  { label: 'Description', value: open.title || label(open.type) },
+                  { label: 'Wallet', value: label(open.ownerRole) },
+                  { label: 'Balance after', value: money(open.balanceAfter) },
+                  { label: 'When', value: dateTime(open.createdAt) },
+                  ...(open.description ? [{ label: 'Note', value: open.description }] : []),
                 ]}
               />
             </section>
 
-            <section>
-              <h3 className="section-title">Settlement</h3>
-              <DetailList
-                rows={[
-                  { label: 'Gross', value: `₹${open.amount.toLocaleString('en-IN')}` },
-                  { label: 'Gateway fee', value: `− ₹${open.fee.toFixed(2)}` },
-                  { label: 'Net to platform', value: `₹${open.net.toLocaleString('en-IN')}` },
-                  { label: 'Settlement date', value: '19 Aug 2026' },
-                ]}
-              />
-            </section>
+            {open.payment?.orderId && (
+              <section>
+                <h3 className="section-title">Gateway</h3>
+                <DetailList
+                  rows={[
+                    { label: 'Gateway', value: label(open.payment.gateway) || 'None' },
+                    { label: 'Order ID', value: open.payment.orderId },
+                    { label: 'Payment ID', value: open.payment.paymentId || '—' },
+                    ...(open.payment.failureReason
+                      ? [{ label: 'Failure', value: open.payment.failureReason }]
+                      : []),
+                  ]}
+                />
+              </section>
+            )}
 
             <section>
-              <h3 className="section-title">Verification trail</h3>
+              <h3 className="section-title">Trail</h3>
               <Timeline
                 items={[
-                  { title: 'Order created', meta: `${open.at} · ${open.orderId}`, state: 'done' },
+                  { title: 'Row created', meta: dateTime(open.createdAt), state: 'done' },
                   {
-                    title: 'Payment authorised',
-                    meta: `${open.method} · signature verified`,
-                    state: open.status === 'failed' ? '' : 'done',
-                  },
-                  {
-                    title: open.status === 'failed' ? 'Payment failed' : 'Payment captured',
+                    title: open.status === 'success' ? 'Settled' : label(open.status),
                     meta:
-                      open.status === 'failed'
-                        ? 'Issuer declined · BAD_REQUEST_ERROR'
-                        : 'Webhook payment.captured received',
-                    state: open.status === 'failed' ? 'active' : 'done',
+                      open.status === 'success'
+                        ? `Balance moved to ${money(open.balanceAfter)}`
+                        : 'No money moved',
+                    state: open.status === 'success' ? 'done' : 'active',
                   },
-                  {
-                    title: 'Wallet credited',
-                    meta:
-                      open.status === 'captured'
-                        ? `₹${open.amount} added to ${open.user}'s wallet`
-                        : 'Not credited',
-                    state: open.status === 'captured' ? 'done' : '',
-                  },
+                  ...(open.createdByAdmin
+                    ? [{ title: 'Made by an admin', meta: 'Manual adjustment', state: 'done' }]
+                    : []),
                 ]}
               />
             </section>
 
-            {open.status === 'failed' && (
-              <Note tone="danger" icon="alert">
-                The issuing bank declined this payment. The user was not charged and no
-                wallet credit was made.
+            {open.payment?.gateway === 'none' && open.type === 'topup' && (
+              <Note tone="info" icon="info">
+                No payment gateway is connected yet, so this top-up was confirmed without a
+                real charge.
               </Note>
             )}
           </div>
@@ -274,36 +306,47 @@ export function PaymentsPage({ notify }) {
       {refunding && (
         <Modal
           title="Issue a refund?"
-          subtitle={`${refunding.id} · ₹${refunding.amount.toLocaleString('en-IN')} to ${refunding.user}`}
-          onClose={() => setRefunding(null)}
+          subtitle={`${refunding.reference} · ${money(refunding.amount)}`}
+          onClose={() => {
+            setRefunding(null);
+            setReason('');
+          }}
           footer={
             <>
-              <Button onClick={() => setRefunding(null)}>Cancel</Button>
               <Button
-                variant="danger"
-                icon="refresh"
                 onClick={() => {
-                  notify('Refund initiated with Razorpay');
                   setRefunding(null);
-                  setOpen(null);
+                  setReason('');
                 }}
               >
-                Refund ₹{refunding.amount.toLocaleString('en-IN')}
+                Cancel
+              </Button>
+              <Button variant="danger" icon="refresh" disabled={busy} onClick={submitRefund}>
+                Refund {money(refunding.amount)}
               </Button>
             </>
           }
         >
           <div className="stack" style={{ gap: 14 }}>
             <Note tone="danger" icon="alert">
-              Refunds reach the customer&rsquo;s bank in 5–7 working days and cannot be
-              reversed. The gateway fee of ₹{refunding.fee.toFixed(2)} is not returned.
+              The refund is posted as a new credit to the wallet — the original charge is
+              left exactly as it is. A charge can only be refunded once.
             </Note>
             <DetailList
               rows={[
-                { label: 'Refund amount', value: `₹${refunding.amount.toLocaleString('en-IN')}` },
-                { label: 'Wallet adjustment', value: `− ₹${refunding.amount.toLocaleString('en-IN')}` },
-                { label: 'Destination', value: `${refunding.method} · original method` },
+                { label: 'Refund amount', value: money(refunding.amount) },
+                { label: 'Goes to', value: `${label(refunding.ownerRole)} wallet` },
+                { label: 'Original charge', value: refunding.title || label(refunding.type) },
               ]}
+            />
+            <label className="field__label" htmlFor="refund-reason">
+              Reason
+            </label>
+            <Textarea
+              id="refund-reason"
+              placeholder="e.g. The astrologer did not respond during the session."
+              value={reason}
+              onChange={(event) => setReason(event.target.value)}
             />
           </div>
         </Modal>

@@ -1,9 +1,13 @@
 /**
  * Consultation Monitoring — paid chat and voice sessions, their status, and the
- * transcript an admin needs when a session is reviewed.
+ * transcript an admin needs when a session is disputed.
+ *
+ * The transcript is fetched only when a session is opened, never with the
+ * listing: reading somebody's conversation is an intrusion, and the server
+ * records that read in the audit log.
  */
 
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { DataTable, RowActions } from '../components/DataTable';
 import { Icon } from '../components/Icon';
 import { PageHeader } from '../components/Shell';
@@ -14,97 +18,120 @@ import {
   DetailList,
   Drawer,
   Identity,
+  LoadingBlock,
   StatCard,
   StatusBadge,
   Timeline,
 } from '../components/ui';
-import { consultationTranscript, consultations as seed } from '../data/operations';
+import { useAction, useApi } from '../hooks/useApi';
+import {
+  endConsultation,
+  getConsultation,
+  getDashboard,
+  listConsultations,
+} from '../services/admin';
+import { can } from '../services/session';
+import { count, dateTime, duration, label, minutes, money } from '../utils/format';
 
+/** The tabs. The API's own words for a session's state. */
 const FILTERS = [
   { key: 'all', label: 'All' },
-  { key: 'ongoing', label: 'Live', dot: true },
-  { key: 'completed', label: 'Completed' },
-  { key: 'missed', label: 'Missed' },
+  { key: 'active', label: 'Live', dot: true },
+  { key: 'ended', label: 'Completed' },
+  { key: 'requested', label: 'Waiting' },
+  { key: 'rejected', label: 'Declined' },
   { key: 'cancelled', label: 'Cancelled' },
 ];
+
+const CHANNELS = [
+  { key: 'all', label: 'Both' },
+  { key: 'chat', label: 'Chat' },
+  { key: 'call', label: 'Voice' },
+];
+
+const PAGE_LIMIT = 100;
 
 export function ConsultationsPage({ notify }) {
   const [filter, setFilter] = useState('all');
   const [channel, setChannel] = useState('all');
-  const [open, setOpen] = useState(null);
+  const [openId, setOpenId] = useState(null);
+  const [run, busy] = useAction(notify);
 
-  const counts = useMemo(
+  const { data, loading, error, reload } = useApi(
     () =>
-      FILTERS.reduce(
-        (acc, item) => ({
-          ...acc,
-          [item.key]:
-            item.key === 'all' ? seed.length : seed.filter((row) => row.status === item.key).length,
-        }),
-        {},
-      ),
-    [],
-  );
-
-  const filtered = useMemo(
-    () =>
-      seed.filter(
-        (row) =>
-          (filter === 'all' || row.status === filter) &&
-          (channel === 'all' || row.channel === channel),
-      ),
+      listConsultations({
+        status: filter === 'all' ? undefined : filter,
+        channel: channel === 'all' ? undefined : channel,
+        limit: PAGE_LIMIT,
+      }),
     [filter, channel],
   );
+  const { data: stats } = useApi(() => getDashboard(7), []);
+  const { data: detail, loading: loadingDetail } = useApi(
+    () => getConsultation(openId),
+    [openId],
+    { skip: !openId },
+  );
+
+  const rows = data?.items ?? [];
+  const open = detail?.consultation;
+  const canManage = can('consultations.manage');
+
+  const forceEnd = (chatId) =>
+    run(() => endConsultation(chatId, 'Ended by an admin'), {
+      success: 'Session ended',
+      onDone: async () => {
+        setOpenId(null);
+        await reload();
+      },
+    });
 
   const columns = [
     {
       key: 'id',
       label: 'Session',
-      sortable: true,
       render: (row) => (
-        <div>
-          <p className="strong mono">{row.id}</p>
-          <p className="faint" style={{ fontSize: 11.5 }}>
-            {row.started}
-          </p>
-        </div>
+        <span className="mono" style={{ fontSize: 12 }}>
+          {row.id.slice(-8)}
+        </span>
       ),
     },
     {
       key: 'user',
       label: 'Seeker',
       sortable: true,
-      render: (row) => <Identity name={row.user} meta={row.topic} size="sm" />,
+      render: (row) => <Identity name={row.user || 'Unknown'} />,
     },
     {
       key: 'astrologer',
       label: 'Astrologer',
       sortable: true,
-      render: (row) => <Identity name={row.astrologer} size="sm" tone="muted" />,
+      render: (row) => <Identity name={row.astrologer || '—'} tone="muted" />,
     },
     {
       key: 'channel',
       label: 'Channel',
       sortable: true,
       render: (row) => (
-        <Badge tone={row.channel === 'call' ? 'lilac' : 'info'}>
-          <Icon name={row.channel === 'call' ? 'phone' : 'chat'} size={11} />
+        <span className="row" style={{ gap: 6, fontSize: 12.5 }}>
+          <Icon name={row.channel === 'call' ? 'phone' : 'chat'} size={14} />
           {row.channel === 'call' ? 'Voice' : 'Chat'}
-        </Badge>
+        </span>
       ),
     },
-    { key: 'duration', label: 'Duration', align: 'right', sortable: true },
+    {
+      key: 'durationSeconds',
+      label: 'Duration',
+      align: 'right',
+      sortable: true,
+      render: (row) => duration(row.durationSeconds),
+    },
     {
       key: 'amount',
       label: 'Charged',
       align: 'right',
       sortable: true,
-      render: (row) =>
-        row.amount ? (
-          <span className="mono strong">₹{row.amount}</span>
-        ) : (
-          <span className="faint">—</span>
-        ),
+      render: (row) => <span className="mono">{row.amount ? money(row.amount) : '—'}</span>,
     },
     {
       key: 'status',
@@ -119,14 +146,14 @@ export function ConsultationsPage({ notify }) {
       render: (row) => (
         <RowActions
           actions={[
-            { label: 'Open session', icon: 'eye', onClick: () => setOpen(row) },
-            ...(row.status === 'ongoing'
+            { label: 'Open session', icon: 'eye', onClick: () => setOpenId(row.id) },
+            ...(row.status === 'active' && canManage
               ? [
                   {
                     label: 'End session',
                     icon: 'ban',
                     variant: 'danger',
-                    onClick: () => notify('Session ended by admin'),
+                    onClick: () => forceEnd(row.id),
                   },
                 ]
               : []),
@@ -141,159 +168,216 @@ export function ConsultationsPage({ notify }) {
       <PageHeader
         title="Consultation Monitoring"
         subtitle="Paid chat and voice sessions across the platform, live and historical"
-        actions={
-          <>
-            <Button icon="download">Export</Button>
-            <Button variant="primary" icon="activity" onClick={() => notify('Live monitor opened')}>
-              Live monitor
-            </Button>
-          </>
-        }
+        actions={<Button icon="refresh" onClick={reload}>Refresh</Button>}
       />
 
       <div className="grid grid--stats" style={{ marginBottom: 16 }}>
-        <StatCard label="Consultations today" value="1,384" icon="chat" tone="brand" delta="+12.1%" hint="vs. yesterday" />
-        <StatCard label="Running now" value={counts.ongoing} icon="activity" tone="success" delta="18 platform-wide" deltaTone="flat" hint="chat & voice" />
-        <StatCard label="Avg. duration" value="17m 42s" icon="clock" tone="yellow" delta="+1m 10s" hint="this week" />
+        <StatCard
+          label="Consultations today"
+          value={count(stats?.consultations?.today ?? 0)}
+          icon="chat"
+          tone="lilac"
+          hint="all channels"
+        />
+        <StatCard
+          label="Running now"
+          value={count(stats?.consultations?.ongoing ?? 0)}
+          icon="activity"
+          tone="success"
+          hint="live sessions"
+        />
+        <StatCard
+          label="Collected this month"
+          value={money(stats?.revenue?.chargedThisMonth ?? 0)}
+          icon="rupee"
+          hint="charged to wallets"
+        />
+        <StatCard
+          label="Platform revenue"
+          value={money(stats?.revenue?.platformThisMonth ?? 0)}
+          icon="wallet"
+          tone="brand"
+          hint="after astrologer payouts"
+        />
       </div>
 
       <DataTable
         columns={columns}
-        rows={filtered}
-        searchKeys={['id', 'user', 'astrologer', 'topic']}
-        searchPlaceholder="Search by session, seeker or astrologer…"
-        onRowClick={setOpen}
+        rows={rows}
+        loading={loading}
+        error={error}
+        onRetry={reload}
+        searchKeys={['user', 'astrologer', 'id']}
+        searchPlaceholder="Search by seeker or astrologer…"
+        onRowClick={(row) => setOpenId(row.id)}
         toolbar={
-          <Chips
-            value={filter}
-            onChange={setFilter}
-            items={FILTERS.map((item) => ({ ...item, count: counts[item.key] }))}
-          />
+          <>
+            <Chips value={filter} onChange={setFilter} items={FILTERS} />
+            <Chips value={channel} onChange={setChannel} items={CHANNELS} />
+          </>
         }
-        toolbarEnd={
-          <Chips
-            value={channel}
-            onChange={setChannel}
-            items={[
-              { key: 'all', label: 'Both' },
-              { key: 'chat', label: 'Chat' },
-              { key: 'call', label: 'Voice' },
-            ]}
-          />
-        }
-        empty={{ icon: 'chat', title: 'No sessions match this view' }}
+        empty={{ icon: 'chat', title: 'No consultations in this view' }}
       />
 
-      {open && (
+      {openId && (
         <Drawer
           wide
-          title={`Session ${open.id}`}
-          subtitle={`${open.topic} · ${open.started}`}
-          onClose={() => setOpen(null)}
+          title={open ? `Session ${open.id.slice(-8)}` : 'Loading…'}
+          subtitle={open ? `${label(open.topic) || 'General'} · ${dateTime(open.requestedAt)}` : ''}
+          onClose={() => setOpenId(null)}
           footer={
-            <>
-              <Button onClick={() => notify('Transcript exported')} icon="download">
-                Export transcript
+            open && open.status === 'active' && canManage ? (
+              <Button variant="danger" icon="ban" disabled={busy} onClick={() => forceEnd(open.id)}>
+                End session
               </Button>
-              {open.status === 'ongoing' ? (
-                <Button variant="danger" icon="ban" onClick={() => notify('Session ended by admin')}>
-                  End session
-                </Button>
-              ) : (
-                <Button variant="danger" icon="rupee" onClick={() => notify('Refund issued')}>
-                  Issue refund
-                </Button>
-              )}
-            </>
+            ) : undefined
           }
         >
-          <div className="stack" style={{ gap: 18 }}>
-            <div className="row row--between">
-              <div className="row" style={{ gap: 8 }}>
-                <StatusBadge status={open.status} />
-                <Badge tone={open.channel === 'call' ? 'lilac' : 'info'}>
-                  {open.channel === 'call' ? 'Voice consultation' : 'Chat consultation'}
-                </Badge>
+          {loadingDetail || !open ? (
+            <LoadingBlock />
+          ) : (
+            <div className="stack" style={{ gap: 18 }}>
+              <div className="row row--between">
+                <div className="row" style={{ gap: 8 }}>
+                  <StatusBadge status={open.status} />
+                  <Badge tone={open.channel === 'call' ? 'lilac' : 'info'}>
+                    {open.channel === 'call' ? 'Voice consultation' : 'Chat consultation'}
+                  </Badge>
+                </div>
+                {open.review?.rating && (
+                  <span className="row" style={{ gap: 4, color: '#FFBF00' }}>
+                    <Icon name="star" size={14} strokeWidth={2} />
+                    <span className="strong">{open.review.rating}.0</span>
+                  </span>
+                )}
               </div>
-              {open.rating && (
-                <span className="row" style={{ gap: 4, color: '#FFBF00' }}>
-                  <Icon name="star" size={14} strokeWidth={2} />
-                  <span className="strong">{open.rating}.0</span>
-                </span>
+
+              <div className="party-grid">
+                <div className="party-card">
+                  <p className="eyebrow">Seeker</p>
+                  <Identity
+                    name={open.user?.name || 'Unknown'}
+                    meta={`Wallet ${money(open.user?.walletBalance)}`}
+                  />
+                </div>
+                <div className="party-card">
+                  <p className="eyebrow">Astrologer</p>
+                  <Identity
+                    name={open.astrologer?.name || '—'}
+                    meta={`${money(open.billing.ratePerMinute)}/min`}
+                    tone="muted"
+                  />
+                </div>
+              </div>
+
+              {open.question && (
+                <section>
+                  <h3 className="section-title">What was asked</h3>
+                  <p style={{ fontSize: 13 }}>{open.question}</p>
+                </section>
+              )}
+
+              <section>
+                <h3 className="section-title">Billing</h3>
+                <DetailList
+                  rows={[
+                    { label: 'Rate', value: `${money(open.billing.ratePerMinute)} / min` },
+                    {
+                      label: 'Billable minutes',
+                      value: open.durationSeconds ? `${minutes(open.durationSeconds)} min` : '—',
+                    },
+                    {
+                      label: 'Free minutes',
+                      value: open.billing.freeMinutes ? `${open.billing.freeMinutes} min` : 'None',
+                    },
+                    { label: 'Charged to wallet', value: money(open.billing.amountCharged) },
+                    {
+                      label: 'Astrologer earning',
+                      value: `${money(open.billing.astrologerEarning)} (${
+                        100 - open.billing.commissionPercent
+                      }%)`,
+                    },
+                    {
+                      label: 'Platform commission',
+                      value: `${money(open.billing.platformEarning)} (${
+                        open.billing.commissionPercent
+                      }%)`,
+                    },
+                  ]}
+                />
+              </section>
+
+              <section>
+                <h3 className="section-title">Session timeline</h3>
+                <Timeline
+                  items={[
+                    {
+                      title: 'Request sent',
+                      meta: `${dateTime(open.requestedAt)} · by ${open.user?.name || 'seeker'}`,
+                      state: 'done',
+                    },
+                    {
+                      title: open.startedAt ? 'Astrologer accepted' : 'Never accepted',
+                      meta: open.startedAt ? dateTime(open.startedAt) : label(open.status),
+                      state: open.startedAt ? 'done' : '',
+                    },
+                    {
+                      title: open.status === 'active' ? 'Session in progress' : 'Session ended',
+                      meta: open.durationSeconds
+                        ? `Duration ${duration(open.durationSeconds)}${
+                            open.endedBy ? ` · ended by ${open.endedBy}` : ''
+                          }`
+                        : 'Not started',
+                      state: open.status === 'active' ? 'active' : open.endedAt ? 'done' : '',
+                    },
+                    {
+                      title: 'Wallet settled',
+                      meta: open.billing.amountCharged
+                        ? `${money(open.billing.amountCharged)} debited`
+                        : 'Nothing charged',
+                      state: open.billing.amountCharged ? 'done' : '',
+                    },
+                  ]}
+                />
+              </section>
+
+              {open.review?.rating && (
+                <section>
+                  <h3 className="section-title">Review</h3>
+                  <p style={{ fontSize: 13 }}>{open.review.comment || 'No comment left.'}</p>
+                  {open.review.reply && (
+                    <p className="faint" style={{ fontSize: 12.5, marginTop: 6 }}>
+                      Astrologer replied: {open.review.reply}
+                    </p>
+                  )}
+                </section>
+              )}
+
+              {open.messages.length > 0 && (
+                <section>
+                  <h3 className="section-title">Transcript</h3>
+                  <div className="transcript">
+                    {open.messages.map((line) => (
+                      <div
+                        key={line.id}
+                        className={`transcript__line transcript__line--${
+                          line.from === 'user' ? 'user' : 'astrologer'
+                        }`}
+                      >
+                        <p>{line.text}</p>
+                        <span>{dateTime(line.at)}</span>
+                      </div>
+                    ))}
+                    {open.messageCount > open.messages.length && (
+                      <p className="faint" style={{ fontSize: 11.5, textAlign: 'center' }}>
+                        Showing the first {open.messages.length} of {open.messageCount} messages
+                      </p>
+                    )}
+                  </div>
+                </section>
               )}
             </div>
-
-            <div className="party-grid">
-              <div className="party-card">
-                <p className="eyebrow">Seeker</p>
-                <Identity name={open.user} meta="Wallet balance ₹4,520" />
-              </div>
-              <div className="party-card">
-                <p className="eyebrow">Astrologer</p>
-                <Identity name={open.astrologer} meta={`₹${open.rate}/min`} tone="muted" />
-              </div>
-            </div>
-
-            <section>
-              <h3 className="section-title">Billing</h3>
-              <DetailList
-                rows={[
-                  { label: 'Rate', value: `₹${open.rate} / min` },
-                  { label: 'Billable minutes', value: open.minutes ? `${open.minutes} min` : '—' },
-                  { label: 'Charged to wallet', value: open.amount ? `₹${open.amount}` : '₹0' },
-                  {
-                    label: 'Astrologer earning',
-                    value: `₹${Math.round(open.amount * 0.3)} (30%)`,
-                  },
-                  { label: 'Platform commission', value: `₹${Math.round(open.amount * 0.7)} (70%)` },
-                ]}
-              />
-            </section>
-
-            <section>
-              <h3 className="section-title">Session timeline</h3>
-              <Timeline
-                items={[
-                  { title: 'Request sent', meta: `${open.started} · by ${open.user}`, state: 'done' },
-                  {
-                    title: 'Astrologer accepted',
-                    meta: open.status === 'missed' ? 'No response within 60s' : 'Within 12s',
-                    state: open.status === 'missed' ? '' : 'done',
-                  },
-                  {
-                    title: open.status === 'ongoing' ? 'Session in progress' : 'Session ended',
-                    meta: open.duration === '—' ? 'Not started' : `Duration ${open.duration}`,
-                    state: open.status === 'ongoing' ? 'active' : open.minutes ? 'done' : '',
-                  },
-                  {
-                    title: 'Wallet settled',
-                    meta: open.amount ? `₹${open.amount} debited` : 'Nothing charged',
-                    state: open.amount ? 'done' : '',
-                  },
-                ]}
-              />
-            </section>
-
-            {open.channel === 'chat' && open.minutes > 0 && (
-              <section>
-                <h3 className="section-title">Transcript excerpt</h3>
-                <div className="transcript">
-                  {consultationTranscript.map((line, index) => (
-                    <div
-                      key={index}
-                      className={`transcript__line transcript__line--${line.from}`}
-                    >
-                      <p>{line.text}</p>
-                      <span>{line.at}</span>
-                    </div>
-                  ))}
-                  <p className="faint" style={{ fontSize: 11.5, textAlign: 'center' }}>
-                    Showing the first 5 of 34 messages
-                  </p>
-                </div>
-              </section>
-            )}
-          </div>
+          )}
         </Drawer>
       )}
     </div>

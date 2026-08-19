@@ -1,14 +1,30 @@
 /**
- * Audit Logs — a read-only record of every action an admin has taken in this
- * console. The page lists the trail and nothing else: no editing, no export,
- * no settings hanging off it.
+ * Audit Logs — a read-only record of every change an admin has made from this
+ * console.
+ *
+ * Read-only is the whole point: rows are written by the server after a change
+ * succeeds, and there is no endpoint that edits or deletes one. A log you can
+ * change is not a log.
  */
 
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { DataTable } from '../components/DataTable';
 import { PageHeader } from '../components/Shell';
-import { Badge, Chips, Identity } from '../components/ui';
-import { auditAreas, auditLogs } from '../data/audit';
+import { Badge, Button, Chips, Identity } from '../components/ui';
+import { useApi } from '../hooks/useApi';
+import { listAuditLogs } from '../services/admin';
+import { dateTime, label } from '../utils/format';
+
+/** The areas the server tags a row with (models/AuditLog.js). */
+const AREAS = [
+  'Users',
+  'Astrologers',
+  'Consultations',
+  'Payments',
+  'Wallets',
+  'Content',
+  'Settings',
+];
 
 const AREA_TONE = {
   Users: 'info',
@@ -20,44 +36,38 @@ const AREA_TONE = {
   Settings: 'warning',
 };
 
-const FILTERS = [{ key: 'all', label: 'All activity' }, ...auditAreas.map((area) => ({ key: area, label: area }))];
+const FILTERS = [
+  { key: 'all', label: 'All activity' },
+  ...AREAS.map((area) => ({ key: area, label: area })),
+];
+
+const PAGE_LIMIT = 200;
 
 export function AuditLogsPage() {
   const [area, setArea] = useState('all');
 
-  const counts = useMemo(
-    () =>
-      FILTERS.reduce(
-        (acc, item) => ({
-          ...acc,
-          [item.key]:
-            item.key === 'all'
-              ? auditLogs.length
-              : auditLogs.filter((row) => row.area === item.key).length,
-        }),
-        {},
-      ),
-    [],
-  );
-
-  const filtered = useMemo(
-    () => (area === 'all' ? auditLogs : auditLogs.filter((row) => row.area === area)),
+  const { data, loading, error, reload } = useApi(
+    () => listAuditLogs({ area: area === 'all' ? undefined : area, limit: PAGE_LIMIT }),
     [area],
   );
 
+  const rows = data?.items ?? [];
+
   const columns = [
     {
-      key: 'at',
+      key: 'createdAt',
       label: 'When',
       sortable: true,
-      sortValue: (row) => row.ts,
-      render: (row) => <span className="nowrap">{row.at}</span>,
+      sortValue: (row) => new Date(row.createdAt).getTime(),
+      render: (row) => <span className="nowrap">{dateTime(row.createdAt)}</span>,
     },
     {
-      key: 'admin',
+      key: 'adminName',
       label: 'Admin',
       sortable: true,
-      render: (row) => <Identity name={row.admin} meta={row.role} size="sm" />,
+      render: (row) => (
+        <Identity name={row.adminName || 'Unknown'} meta={label(row.adminRole)} size="sm" />
+      ),
     },
     {
       key: 'action',
@@ -84,7 +94,7 @@ export function AuditLogsPage() {
       align: 'right',
       render: (row) => (
         <span className="mono" style={{ fontSize: 12.5 }}>
-          {row.ip}
+          {row.ip || '—'}
         </span>
       ),
     },
@@ -94,21 +104,19 @@ export function AuditLogsPage() {
     <div className="page">
       <PageHeader
         title="Audit Logs"
-        subtitle="Every action taken from this console, newest first"
+        subtitle="Every change made from this console, newest first"
+        actions={<Button icon="refresh" onClick={reload}>Refresh</Button>}
       />
 
       <DataTable
         columns={columns}
-        rows={filtered}
-        searchKeys={['admin', 'action', 'target', 'area', 'ip', 'id']}
+        rows={rows}
+        loading={loading}
+        error={error}
+        onRetry={reload}
+        searchKeys={['adminName', 'action', 'target', 'area', 'ip']}
         searchPlaceholder="Search by admin, action or record…"
-        toolbar={
-          <Chips
-            value={area}
-            onChange={setArea}
-            items={FILTERS.map((item) => ({ ...item, count: counts[item.key] }))}
-          />
-        }
+        toolbar={<Chips value={area} onChange={setArea} items={FILTERS} />}
         empty={{ icon: 'shield', title: 'No admin activity in this view' }}
       />
     </div>

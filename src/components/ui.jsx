@@ -404,6 +404,40 @@ export function Progress({ value, tone }) {
   );
 }
 
+/** A small spinner for anything that is still loading. */
+export function Spinner({ size = 18 }) {
+  return (
+    <span
+      className="spinner"
+      style={{ width: size, height: size }}
+      role="status"
+      aria-label="Loading"
+    />
+  );
+}
+
+/** Fills a card while its contents are being fetched. */
+export function LoadingBlock({ label = 'Loading…' }) {
+  return (
+    <div className="table-state">
+      <Spinner />
+      <span>{label}</span>
+    </div>
+  );
+}
+
+/** What a card shows when its fetch failed. */
+export function ErrorBlock({ error, onRetry }) {
+  return (
+    <EmptyState
+      icon="alert"
+      title="Could not load this"
+      desc={error?.message || 'Something went wrong.'}
+      action={onRetry ? <Button onClick={onRetry} icon="refresh">Try again</Button> : undefined}
+    />
+  );
+}
+
 export function EmptyState({ icon = 'inbox', title, desc, action }) {
   return (
     <div className="empty">

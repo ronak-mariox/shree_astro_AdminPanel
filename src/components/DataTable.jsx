@@ -13,7 +13,7 @@
 
 import { useMemo, useState } from 'react';
 import { Icon } from './Icon';
-import { Button, EmptyState, SearchInput } from './ui';
+import { Button, EmptyState, SearchInput, Spinner } from './ui';
 import { cx } from '../utils/cx';
 
 const PAGE_SIZE = 8;
@@ -29,15 +29,23 @@ export function DataTable({
   pageSize = PAGE_SIZE,
   empty,
   dense,
+  /** True while the rows are still being fetched. */
+  loading,
+  /** An ApiError, when the fetch failed. `onRetry` renders a button beside it. */
+  error,
+  onRetry,
 }) {
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState(null);
   const [page, setPage] = useState(1);
 
+
   const searched = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    if (!needle || !searchKeys.length) return rows;
-    return rows.filter((row) =>
+    /** `rows` is null until the first response lands. */
+    const list = rows ?? [];
+    if (!needle || !searchKeys.length) return list;
+    return list.filter((row) =>
       searchKeys.some((key) => String(row[key] ?? '').toLowerCase().includes(needle)),
     );
   }, [rows, query, searchKeys]);
@@ -147,7 +155,23 @@ export function DataTable({
           </tbody>
         </table>
 
-        {visible.length === 0 && (
+        {loading && visible.length === 0 && (
+          <div className="table-state">
+            <Spinner />
+            <span>Loading…</span>
+          </div>
+        )}
+
+        {!loading && error && (
+          <EmptyState
+            icon="alert"
+            title="Could not load this"
+            desc={error.message}
+            action={onRetry ? <Button onClick={onRetry} icon="refresh">Try again</Button> : undefined}
+          />
+        )}
+
+        {!loading && !error && visible.length === 0 && (
           <EmptyState
             icon={empty?.icon}
             title={empty?.title || 'Nothing to show'}
