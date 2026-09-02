@@ -36,7 +36,6 @@ const STATUSES = [
   { key: 'all', label: 'All' },
   { key: 'published', label: 'Published' },
   { key: 'draft', label: 'Drafts' },
-  { key: 'archived', label: 'Archived' },
 ];
 
 /** The categories the app's content list groups by. */

@@ -56,7 +56,7 @@ import { count, date, label, money, orDash, phone as formatPhone } from '../util
 const FILTERS = [
   { key: 'all', label: 'All', query: {} },
   { key: 'approved', label: 'Approved', query: { applicationStatus: 'approved', status: 'active' } },
-  { key: 'pending', label: 'Applications', query: { applicationStatus: 'under_review' } },
+  { key: 'pending', label: 'Pending', query: { applicationStatus: 'under_review' } },
   { key: 'blocked', label: 'Blocked', query: { status: 'blocked' } },
 ];
 

@@ -38,8 +38,6 @@ const FILTERS = [
   { key: 'all', label: 'All' },
   { key: 'active', label: 'Live', dot: true },
   { key: 'ended', label: 'Completed' },
-  { key: 'requested', label: 'Waiting' },
-  { key: 'rejected', label: 'Declined' },
   { key: 'cancelled', label: 'Cancelled' },
 ];
 

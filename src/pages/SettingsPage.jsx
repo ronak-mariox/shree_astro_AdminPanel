@@ -12,7 +12,6 @@ import { DataTable, RowActions } from '../components/DataTable';
 import { Icon } from '../components/Icon';
 import { PageHeader } from '../components/Shell';
 import {
-  Badge,
   Button,
   Card,
   DetailList,
@@ -30,34 +29,103 @@ import {
 } from '../components/ui';
 import { useAction, useApi } from '../hooks/useApi';
 import {
-  createAdmin,
   getSettings,
-  listAdmins,
-  listAuditLogs,
   listTickets,
   resolveTicket,
-  revokeAdmin,
-  updateAdmin,
   updateSettings,
 } from '../services/admin';
-import { can, getAdmin } from '../services/session';
-import { dateTime, label, money, relative } from '../utils/format';
+import { can } from '../services/session';
+import { dateTime, label, money } from '../utils/format';
 
 const TABS = [
   { key: 'platform', label: 'Platform' },
-  { key: 'team', label: 'Admin team' },
+  { key: 'thirdParty', label: 'Third parties' },
   { key: 'support', label: 'Support' },
 ];
 
-/** The roles the API accepts, with what each one is for. */
-const ROLES = [
-  { value: 'super_admin', label: 'Super Admin — everything, including the team' },
-  { value: 'admin', label: 'Admin — everything except managing admins' },
-  { value: 'finance', label: 'Finance — payments, wallets and payouts' },
-  { value: 'support_lead', label: 'Support Lead — users and consultations' },
-  { value: 'content_manager', label: 'Content Manager — the article library' },
-  { value: 'consultation_manager', label: 'Consultation Manager — sessions and reports' },
-  { value: 'user_manager', label: 'User Manager — user accounts only' },
+/** The integrations with a dedicated credentials form. Each field left blank on save keeps its current value. */
+const THIRD_PARTY_PROVIDERS = [
+  {
+    key: 'apple',
+    name: 'Apple Sign-In',
+    icon: 'lock',
+    subtitle: 'Sign in with Apple for the customer and astrologer apps',
+    fields: [
+      { key: 'serviceId', label: 'Service ID (Client ID)', placeholder: 'com.shreeastro.app.service' },
+      { key: 'teamId', label: 'Team ID', placeholder: 'e.g., ABCDE12345' },
+      { key: 'keyId', label: 'Key ID', placeholder: 'e.g., XYZ987WQ12' },
+      {
+        key: 'privateKey',
+        label: 'Private Key (.p8)',
+        placeholder: 'Paste the contents of the AuthKey_XXXX.p8 file',
+        secret: true,
+        multiline: true,
+      },
+    ],
+  },
+  {
+    key: 'email',
+    name: 'Email (SMTP)',
+    icon: 'mail',
+    subtitle: 'Configure SMTP for transactional emails',
+    fields: [
+      { key: 'host', label: 'SMTP Host', placeholder: 'e.g., smtp.gmail.com' },
+      { key: 'port', label: 'Port', placeholder: 'e.g., 587' },
+      { key: 'username', label: 'Username / Email', placeholder: 'e.g., noreply@shreeastro.com' },
+      { key: 'password', label: 'Password / App Password', placeholder: 'Enter email password or app password', secret: true },
+    ],
+  },
+  {
+    key: 'sms',
+    name: 'SMS (MSG91)',
+    icon: 'phone',
+    subtitle: 'Configure MSG91 for OTP and transactional SMS',
+    fields: [
+      { key: 'authKey', label: 'Auth Key', placeholder: 'Enter MSG91 Auth Key', secret: true },
+      { key: 'templateId', label: 'OTP Template ID', placeholder: 'Enter approved MSG91 OTP Template ID' },
+      { key: 'senderId', label: 'Sender ID', placeholder: 'Enter 6-letter Sender ID (e.g., SHRAST)' },
+    ],
+  },
+  {
+    key: 'awsS3',
+    name: 'AWS S3',
+    icon: 'file',
+    subtitle: 'Storage for uploaded documents, avatars and article images',
+    fields: [
+      { key: 'accessKeyId', label: 'Access Key ID', placeholder: 'e.g., AKIAxxxxxxxxxxxx' },
+      { key: 'secretAccessKey', label: 'Secret Access Key', placeholder: 'Enter secret access key', secret: true },
+      { key: 'bucket', label: 'Bucket Name', placeholder: 'e.g., shree-astro-uploads' },
+      { key: 'region', label: 'Region', placeholder: 'e.g., ap-south-1' },
+    ],
+  },
+  {
+    key: 'firebase',
+    name: 'Firebase',
+    icon: 'zap',
+    subtitle: 'Push notifications and analytics for both apps',
+    fields: [
+      { key: 'projectId', label: 'Project ID', placeholder: 'e.g., shree-astro-12345' },
+      { key: 'serverKey', label: 'Cloud Messaging Server Key', placeholder: 'Enter FCM server key', secret: true },
+      { key: 'senderId', label: 'Sender ID', placeholder: 'e.g., 1234567890' },
+    ],
+  },
+];
+
+/** First 4 and last 2 characters, so a saved credential can be recognised without being readable. */
+function maskValue(value) {
+  if (!value) return '—';
+  if (value.length > 6) return `${value.slice(0, 4)}${'*'.repeat(4)}${value.slice(-2)}`;
+  return '*'.repeat(Math.max(value.length, 4));
+}
+
+/** What kind of service a custom (not pre-listed) third party plugs into. */
+const THIRD_PARTY_CATEGORIES = [
+  { value: 'payment_gateway', label: 'Payment Gateway' },
+  { value: 'sms_otp', label: 'SMS / OTP Provider' },
+  { value: 'push_notifications', label: 'Push Notifications' },
+  { value: 'email', label: 'Email Provider' },
+  { value: 'analytics', label: 'Analytics' },
+  { value: 'other', label: 'Other' },
 ];
 
 const PAYOUT_CYCLES = [
@@ -67,13 +135,27 @@ const PAYOUT_CYCLES = [
   { value: 'monthly', label: 'Monthly' },
 ];
 
-const BLANK_INVITE = { name: '', email: '', role: 'content_manager' };
+const BLANK_THIRD_PARTY = {
+  name: '',
+  category: THIRD_PARTY_CATEGORIES[0].value,
+  identifier: '',
+  enabled: true,
+  notes: '',
+};
 
 export function SettingsPage({ notify }) {
   const [tab, setTab] = useState('platform');
-  const [inviting, setInviting] = useState(false);
-  const [invite, setInvite] = useState(BLANK_INVITE);
-  const [created, setCreated] = useState(null);
+  const [providerData, setProviderData] = useState(() =>
+    Object.fromEntries(
+      THIRD_PARTY_PROVIDERS.map((provider) => [provider.key, { enabled: false, values: {}, updatedAt: null }]),
+    ),
+  );
+  const [configuring, setConfiguring] = useState(null);
+  const [providerForm, setProviderForm] = useState({});
+  const [revealed, setRevealed] = useState({});
+  const [thirdParties, setThirdParties] = useState([]);
+  const [thirdPartyModal, setThirdPartyModal] = useState(null);
+  const [thirdPartyForm, setThirdPartyForm] = useState(BLANK_THIRD_PARTY);
   const [answering, setAnswering] = useState(null);
   const [resolution, setResolution] = useState('');
   const [run, busy] = useAction(notify);
@@ -88,8 +170,6 @@ export function SettingsPage({ notify }) {
   const [edits, setEdits] = useState(null);
 
   const settings = useApi(() => getSettings(), []);
-  const team = useApi(() => listAdmins({ limit: 100 }), [], { skip: tab !== 'team' });
-  const activity = useApi(() => listAuditLogs({ limit: 6 }), [], { skip: tab !== 'team' });
   const tickets = useApi(() => listTickets({ limit: 100 }), [], { skip: tab !== 'support' });
 
   const form = edits ?? settings.data?.settings ?? null;
@@ -102,8 +182,6 @@ export function SettingsPage({ notify }) {
     });
 
   const canManage = can('settings.manage');
-  const canManageTeam = can('admins.manage');
-  const me = getAdmin();
 
   const setNumber = (key) => (event) =>
     setForm((current) => ({ ...current, [key]: event.target.value }));
@@ -133,29 +211,66 @@ export function SettingsPage({ notify }) {
       },
     );
 
-  const sendInvite = () =>
-    run(() => createAdmin({ name: invite.name.trim(), email: invite.email.trim(), role: invite.role }), {
-      onDone: async (result) => {
-        if (!result) return;
-        setInviting(false);
-        setInvite(BLANK_INVITE);
-        /** The password is shown once and never again, so hold it on screen. */
-        setCreated(result);
-        await team.reload();
+  const openConfigure = (providerKey) => {
+    setProviderForm({});
+    setRevealed({});
+    setConfiguring(providerKey);
+  };
+
+  const saveProviderConfig = () => {
+    const provider = THIRD_PARTY_PROVIDERS.find((item) => item.key === configuring);
+    setProviderData((current) => ({
+      ...current,
+      [configuring]: {
+        enabled: true,
+        values: { ...current[configuring].values, ...providerForm },
+        updatedAt: new Date().toISOString(),
       },
-    });
+    }));
+    notify(`${provider.name} configuration saved`);
+    setConfiguring(null);
+  };
 
-  const changeRole = (member, role) =>
-    run(() => updateAdmin(member.id, { role }), {
-      success: `${member.name} is now ${label(role)}`,
-      onDone: team.reload,
-    });
+  const openAddThirdParty = () => {
+    setThirdPartyForm(BLANK_THIRD_PARTY);
+    setThirdPartyModal('add');
+  };
 
-  const revoke = (member) =>
-    run(() => revokeAdmin(member.id), {
-      success: `Access revoked for ${member.name}`,
-      onDone: team.reload,
+  const openEditThirdParty = (row) => {
+    setThirdPartyForm({
+      name: row.name,
+      category: row.category,
+      identifier: row.identifier,
+      enabled: row.enabled,
+      notes: row.notes,
     });
+    setThirdPartyModal(row.id);
+  };
+
+  const saveThirdParty = () => {
+    if (thirdPartyModal === 'add') {
+      setThirdParties((current) => [
+        ...current,
+        { id: crypto.randomUUID(), ...thirdPartyForm, name: thirdPartyForm.name.trim() },
+      ]);
+      notify('Third party added');
+    } else {
+      setThirdParties((current) =>
+        current.map((item) =>
+          item.id === thirdPartyModal
+            ? { ...item, ...thirdPartyForm, name: thirdPartyForm.name.trim() }
+            : item,
+        ),
+      );
+      notify('Third party updated');
+    }
+    setThirdPartyModal(null);
+  };
+
+  const removeThirdParty = (row) => {
+    setThirdParties((current) => current.filter((item) => item.id !== row.id));
+    notify(`${row.name} removed`);
+  };
 
   const answerTicket = () =>
     run(() => resolveTicket(answering._id, { status: 'resolved', resolution: resolution.trim() }), {
@@ -169,53 +284,48 @@ export function SettingsPage({ notify }) {
 
   const commission = Number(form?.commissionPercent ?? 0);
 
-  const teamColumns = [
+  const thirdPartyColumns = [
     {
       key: 'name',
-      label: 'Member',
-      sortable: true,
-      render: (row) => <Identity name={row.name} meta={row.email} />,
-    },
-    {
-      key: 'role',
-      label: 'Role',
+      label: 'Name',
       sortable: true,
       render: (row) => (
-        <Badge tone={row.role === 'super_admin' ? 'brand' : 'neutral'}>{label(row.role)}</Badge>
+        <Identity
+          name={row.name}
+          meta={THIRD_PARTY_CATEGORIES.find((c) => c.value === row.category)?.label}
+        />
       ),
     },
     {
-      key: 'lastActive',
-      label: 'Last active',
-      sortable: true,
-      render: (row) => relative(row.lastActive),
+      key: 'identifier',
+      label: 'Identifier',
+      render: (row) => <span className="mono faint">{row.identifier || '—'}</span>,
     },
     {
-      key: 'status',
+      key: 'enabled',
       label: 'Status',
       sortable: true,
-      render: (row) => <StatusBadge status={row.status} />,
+      render: (row) => <StatusBadge status={row.enabled ? 'active' : 'inactive'} />,
+    },
+    {
+      key: 'notes',
+      label: 'Notes',
+      render: (row) => <span className="faint truncate">{row.notes || '—'}</span>,
     },
     {
       key: 'actions',
       label: '',
       align: 'actions',
       render: (row) =>
-        canManageTeam && row.id !== me?.id ? (
+        canManage ? (
           <RowActions
             actions={[
-              ...ROLES.filter((role) => role.value !== row.role)
-                .slice(0, 3)
-                .map((role) => ({
-                  label: `Make ${label(role.value)}`,
-                  icon: 'edit',
-                  onClick: () => changeRole(row, role.value),
-                })),
+              { label: 'Edit', icon: 'edit', onClick: () => openEditThirdParty(row) },
               {
-                label: 'Revoke access',
+                label: 'Remove',
                 icon: 'ban',
                 variant: 'danger',
-                onClick: () => revoke(row),
+                onClick: () => removeThirdParty(row),
               },
             ]}
           />
@@ -452,63 +562,57 @@ export function SettingsPage({ notify }) {
           </div>
         ))}
 
-      {tab === 'team' && (
-        <div className="grid grid--sidebar">
-          <DataTable
-            columns={teamColumns}
-            rows={team.data?.items ?? []}
-            loading={team.loading}
-            error={team.error}
-            onRetry={team.reload}
-            searchKeys={['name', 'email', 'role']}
-            searchPlaceholder="Search the admin team…"
-            toolbarEnd={
-              canManageTeam ? (
-                <Button size="sm" variant="primary" icon="plus" onClick={() => setInviting(true)}>
-                  Add admin
-                </Button>
-              ) : undefined
-            }
-            empty={{ icon: 'users', title: 'No admin accounts' }}
-          />
-
-          <div className="stack">
-            <Card title="Access policy" subtitle="Applies to every admin account">
-              <ToggleRow
-                title="Two-factor verification"
-                desc="A code on every sign-in — change it on the Platform tab"
-                on={Boolean(settings.data?.settings?.features?.adminTwoFactor)}
-                onChange={() => notify('Change this on the Platform tab')}
-              />
-              <div style={{ padding: '12px 0 2px' }}>
-                <Note tone="info" icon="info">
-                  Revoking access suspends the account rather than deleting it — audit rows
-                  point at it, and a log that names a missing admin is worth less.
-                </Note>
-              </div>
-            </Card>
-
-            <Card title="Recent admin activity" subtitle="Audit trail">
-              <div className="stack" style={{ gap: 12 }}>
-                {activity.loading && <LoadingBlock />}
-                {(activity.data?.items ?? []).map((row) => (
-                  <div className="row" key={row._id} style={{ gap: 10, alignItems: 'flex-start' }}>
-                    <span className="feed__icon" style={{ width: 28, height: 28 }}>
-                      <Icon name="shield" size={14} />
-                    </span>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <p style={{ fontSize: 12.5 }}>
-                        <strong>{row.adminName}</strong> · {row.action}
-                      </p>
-                      <p className="faint" style={{ fontSize: 11 }}>
-                        {relative(row.createdAt)}
-                      </p>
-                    </div>
+      {tab === 'thirdParty' && (
+        <div className="stack" style={{ gap: 16 }}>
+          <div className="grid grid--3" style={{ gap: 14 }}>
+            {THIRD_PARTY_PROVIDERS.map((provider) => {
+              const state = providerData[provider.key];
+              return (
+                <Card key={provider.key} title={provider.name} subtitle={provider.subtitle}>
+                  <div className="row row--between" style={{ marginBottom: 12 }}>
+                    <StatusBadge status={state.enabled ? 'active' : 'inactive'} />
+                    {canManage && (
+                      <Button size="sm" icon="edit" onClick={() => openConfigure(provider.key)}>
+                        {state.enabled ? 'Update' : 'Configure'}
+                      </Button>
+                    )}
                   </div>
-                ))}
-              </div>
-            </Card>
+                  {state.enabled ? (
+                    <DetailList
+                      rows={[
+                        ...provider.fields.map((field) => ({
+                          label: field.label,
+                          value: maskValue(state.values[field.key]),
+                        })),
+                        { label: 'Last updated', value: dateTime(state.updatedAt) },
+                      ]}
+                    />
+                  ) : (
+                    <Note tone="info" icon="info">
+                      Not configured yet.
+                    </Note>
+                  )}
+                </Card>
+              );
+            })}
           </div>
+
+          <Card title="Other third parties" subtitle="Anything not listed above">
+            <DataTable
+              columns={thirdPartyColumns}
+              rows={thirdParties}
+              searchKeys={['name', 'identifier']}
+              searchPlaceholder="Search third parties…"
+              toolbarEnd={
+                canManage ? (
+                  <Button size="sm" variant="primary" icon="plus" onClick={openAddThirdParty}>
+                    Add third party
+                  </Button>
+                ) : undefined
+              }
+              empty={{ icon: 'api', title: 'No other third parties added yet' }}
+            />
+          </Card>
         </div>
       )}
 
@@ -525,71 +629,132 @@ export function SettingsPage({ notify }) {
         />
       )}
 
-      {inviting && (
+      {configuring && (() => {
+        const provider = THIRD_PARTY_PROVIDERS.find((item) => item.key === configuring);
+        return (
+          <Modal
+            title={`${providerData[configuring].enabled ? 'Update' : 'Configure'} ${provider.name}`}
+            subtitle="Credentials are stored securely and are not shown again after saving"
+            onClose={() => setConfiguring(null)}
+            footer={
+              <>
+                <Button onClick={() => setConfiguring(null)}>Cancel</Button>
+                <Button variant="primary" icon="check" onClick={saveProviderConfig}>
+                  Save configuration
+                </Button>
+              </>
+            }
+          >
+            <div className="stack" style={{ gap: 16 }}>
+              <Note tone="info" icon="info">
+                Fields left blank keep their current saved value.
+              </Note>
+              {provider.fields.map((field) => (
+                <Field key={field.key} label={field.label}>
+                  {field.multiline ? (
+                    <Textarea
+                      placeholder={field.placeholder}
+                      value={providerForm[field.key] || ''}
+                      onChange={(event) =>
+                        setProviderForm((c) => ({ ...c, [field.key]: event.target.value }))
+                      }
+                    />
+                  ) : (
+                    <Input
+                      type={field.secret && !revealed[field.key] ? 'password' : 'text'}
+                      placeholder={field.placeholder}
+                      value={providerForm[field.key] || ''}
+                      onChange={(event) =>
+                        setProviderForm((c) => ({ ...c, [field.key]: event.target.value }))
+                      }
+                      action={
+                        field.secret ? (
+                          <button
+                            type="button"
+                            className="input-group__action"
+                            onClick={() =>
+                              setRevealed((c) => ({ ...c, [field.key]: !c[field.key] }))
+                            }
+                            aria-label={revealed[field.key] ? 'Hide value' : 'Show value'}
+                          >
+                            <Icon name={revealed[field.key] ? 'eyeOff' : 'eye'} size={16} />
+                          </button>
+                        ) : undefined
+                      }
+                    />
+                  )}
+                </Field>
+              ))}
+            </div>
+          </Modal>
+        );
+      })()}
+
+      {thirdPartyModal && (
         <Modal
-          title="Add an admin"
-          subtitle="They sign in with a temporary password you hand over"
-          onClose={() => setInviting(false)}
+          title={thirdPartyModal === 'add' ? 'Add a third party' : 'Edit third party'}
+          subtitle="Shown here for reference — not yet wired to a live integration"
+          onClose={() => setThirdPartyModal(null)}
           footer={
             <>
-              <Button onClick={() => setInviting(false)}>Cancel</Button>
+              <Button onClick={() => setThirdPartyModal(null)}>Cancel</Button>
               <Button
                 variant="primary"
                 icon="check"
-                disabled={busy || !/^\S+@\S+\.\S+$/.test(invite.email.trim())}
-                onClick={sendInvite}
+                disabled={!thirdPartyForm.name.trim()}
+                onClick={saveThirdParty}
               >
-                Create account
+                {thirdPartyModal === 'add' ? 'Add third party' : 'Save changes'}
               </Button>
             </>
           }
         >
           <div className="stack" style={{ gap: 16 }}>
-            <Field label="Full name">
+            <Field label="Name">
               <Input
-                placeholder="e.g. Karan Doshi"
-                value={invite.name}
-                onChange={(event) => setInvite((c) => ({ ...c, name: event.target.value }))}
+                placeholder="e.g. Razorpay"
+                value={thirdPartyForm.name}
+                onChange={(event) =>
+                  setThirdPartyForm((c) => ({ ...c, name: event.target.value }))
+                }
               />
             </Field>
-            <Field label="Email address">
-              <Input
-                type="email"
-                placeholder="name@shreeastro.com"
-                value={invite.email}
-                onChange={(event) => setInvite((c) => ({ ...c, email: event.target.value }))}
-              />
-            </Field>
-            <Field label="Role" hint="What they can reach in this console">
+            <Field label="Category">
               <Select
-                value={invite.role}
-                onChange={(event) => setInvite((c) => ({ ...c, role: event.target.value }))}
-                options={ROLES}
+                value={thirdPartyForm.category}
+                onChange={(event) =>
+                  setThirdPartyForm((c) => ({ ...c, category: event.target.value }))
+                }
+                options={THIRD_PARTY_CATEGORIES}
               />
             </Field>
-          </div>
-        </Modal>
-      )}
-
-      {created && (
-        <Modal
-          title="Account created"
-          subtitle={created.admin.email}
-          onClose={() => setCreated(null)}
-          footer={<Button variant="primary" onClick={() => setCreated(null)}>Done</Button>}
-        >
-          <div className="stack" style={{ gap: 14 }}>
-            <Note tone="warning" icon="alert">
-              This password is stored only as a hash, so this is the one and only time it can
-              be read. Hand it over now and let them change it.
-            </Note>
-            <DetailList
-              rows={[
-                { label: 'Email', value: created.admin.email },
-                { label: 'Temporary password', value: created.temporaryPassword },
-                { label: 'Role', value: label(created.admin.role) },
-              ]}
+            <Field
+              label="Identifier"
+              hint="API key, merchant ID or account name — for reference only"
+            >
+              <Input
+                placeholder="e.g. rzp_live_••••"
+                value={thirdPartyForm.identifier}
+                onChange={(event) =>
+                  setThirdPartyForm((c) => ({ ...c, identifier: event.target.value }))
+                }
+              />
+            </Field>
+            <ToggleRow
+              title="Enabled"
+              desc="Whether this integration is currently in use"
+              on={thirdPartyForm.enabled}
+              onChange={(value) => setThirdPartyForm((c) => ({ ...c, enabled: value }))}
             />
+            <Field label="Notes" hint="Optional">
+              <Textarea
+                placeholder="Anything the next admin should know"
+                value={thirdPartyForm.notes}
+                onChange={(event) =>
+                  setThirdPartyForm((c) => ({ ...c, notes: event.target.value }))
+                }
+              />
+            </Field>
           </div>
         </Modal>
       )}

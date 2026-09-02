@@ -39,22 +39,19 @@ import {
 } from '../utils/format';
 
 const FILTERS = [
-  { key: 'all', label: 'All users' },
   { key: 'active', label: 'Active' },
   { key: 'blocked', label: 'Blocked' },
-  { key: 'unverified', label: 'Unverified' },
 ];
 
 /** How many rows to pull; DataTable pages through them client-side. */
 const PAGE_LIMIT = 100;
 
 export function UsersPage({ notify }) {
-  const [filter, setFilter] = useState('all');
+  const [filter, setFilter] = useState('active');
   const [openId, setOpenId] = useState(null);
   const [run, busy] = useAction(notify);
 
-  /** 'unverified' has no server-side filter, so it is applied to the rows. */
-  const status = filter === 'active' || filter === 'blocked' ? filter : undefined;
+  const status = filter;
 
   const { data, loading, error, reload } = useApi(
     () => listUsers({ status, limit: PAGE_LIMIT }),
@@ -69,14 +66,11 @@ export function UsersPage({ notify }) {
     { skip: !openId },
   );
 
-  const all = data?.items ?? [];
-  const rows = filter === 'unverified' ? all.filter((row) => !row.verified) : all;
+  const rows = data?.items ?? [];
 
   const counts = {
-    all: data?.total ?? 0,
     active: filter === 'active' ? rows.length : undefined,
     blocked: filter === 'blocked' ? rows.length : undefined,
-    unverified: filter === 'unverified' ? rows.length : undefined,
   };
 
   const changeStatus = (id, next) =>
