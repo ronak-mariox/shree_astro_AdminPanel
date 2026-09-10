@@ -2,9 +2,8 @@
  * Platform Administration — the numbers and switches that govern the product,
  * and who is allowed into this console.
  *
- * The settings on this page are live: the recharge limits govern the very next
- * top-up, and the free trial minutes the very next consultation. Nothing here
- * needs a deploy.
+ * The settings on this page are live: the recharge limits govern the very
+ * next top-up. Nothing here needs a deploy.
  */
 
 import { useState } from 'react';
@@ -12,6 +11,7 @@ import { DataTable, RowActions } from '../components/DataTable';
 import { Icon } from '../components/Icon';
 import { PageHeader } from '../components/Shell';
 import {
+  Avatar,
   Button,
   Card,
   DetailList,
@@ -29,15 +29,24 @@ import {
 } from '../components/ui';
 import { useAction, useApi } from '../hooks/useApi';
 import {
+  createThirdParty,
+  deleteThirdParty,
   getSettings,
+  listIntegrations,
+  listThirdParties,
   listTickets,
   resolveTicket,
+  saveIntegration,
+  setIntegrationEnabled,
+  updateOwnProfile,
   updateSettings,
+  updateThirdParty,
 } from '../services/admin';
-import { can } from '../services/session';
+import { can, updateCachedAdmin } from '../services/session';
 import { dateTime, label, money } from '../utils/format';
 
 const TABS = [
+  { key: 'account', label: 'My Account' },
   { key: 'platform', label: 'Platform' },
   { key: 'thirdParty', label: 'Third parties' },
   { key: 'support', label: 'Support' },
@@ -60,6 +69,19 @@ const THIRD_PARTY_PROVIDERS = [
         placeholder: 'Paste the contents of the AuthKey_XXXX.p8 file',
         secret: true,
         multiline: true,
+      },
+    ],
+  },
+  {
+    key: 'google',
+    name: 'Google Sign-In',
+    icon: 'lock',
+    subtitle: 'Sign in with Google for the customer app',
+    fields: [
+      {
+        key: 'clientIds',
+        label: 'Client ID(s)',
+        placeholder: 'Comma-separated OAuth client IDs, e.g. the Android and iOS client from Google Cloud Console',
       },
     ],
   },
@@ -102,21 +124,20 @@ const THIRD_PARTY_PROVIDERS = [
     key: 'firebase',
     name: 'Firebase',
     icon: 'zap',
-    subtitle: 'Push notifications and analytics for both apps',
+    subtitle: 'Push notifications for both apps',
     fields: [
       { key: 'projectId', label: 'Project ID', placeholder: 'e.g., shree-astro-12345' },
-      { key: 'serverKey', label: 'Cloud Messaging Server Key', placeholder: 'Enter FCM server key', secret: true },
-      { key: 'senderId', label: 'Sender ID', placeholder: 'e.g., 1234567890' },
+      { key: 'clientEmail', label: 'Client Email', placeholder: 'firebase-adminsdk-xxxxx@shree-astro-12345.iam.gserviceaccount.com' },
+      {
+        key: 'privateKey',
+        label: 'Private Key',
+        placeholder: 'Paste the "private_key" value from the service account JSON',
+        secret: true,
+        multiline: true,
+      },
     ],
   },
 ];
-
-/** First 4 and last 2 characters, so a saved credential can be recognised without being readable. */
-function maskValue(value) {
-  if (!value) return '—';
-  if (value.length > 6) return `${value.slice(0, 4)}${'*'.repeat(4)}${value.slice(-2)}`;
-  return '*'.repeat(Math.max(value.length, 4));
-}
 
 /** What kind of service a custom (not pre-listed) third party plugs into. */
 const THIRD_PARTY_CATEGORIES = [
@@ -143,22 +164,38 @@ const BLANK_THIRD_PARTY = {
   notes: '',
 };
 
-export function SettingsPage({ notify }) {
-  const [tab, setTab] = useState('platform');
-  const [providerData, setProviderData] = useState(() =>
-    Object.fromEntries(
-      THIRD_PARTY_PROVIDERS.map((provider) => [provider.key, { enabled: false, values: {}, updatedAt: null }]),
-    ),
-  );
+export function SettingsPage({ notify, admin }) {
+  const [tab, setTab] = useState('account');
   const [configuring, setConfiguring] = useState(null);
   const [providerForm, setProviderForm] = useState({});
   const [revealed, setRevealed] = useState({});
-  const [thirdParties, setThirdParties] = useState([]);
   const [thirdPartyModal, setThirdPartyModal] = useState(null);
   const [thirdPartyForm, setThirdPartyForm] = useState(BLANK_THIRD_PARTY);
   const [answering, setAnswering] = useState(null);
   const [resolution, setResolution] = useState('');
   const [run, busy] = useAction(notify);
+
+  /** My Account: the name field starts from the signed-in admin's own record. */
+  const [accountName, setAccountName] = useState(admin?.name || '');
+  const [accountPhoto, setAccountPhoto] = useState(null);
+  const [accountPhotoPreview, setAccountPhotoPreview] = useState(null);
+
+  const pickAccountPhoto = (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setAccountPhoto(file);
+    setAccountPhotoPreview(URL.createObjectURL(file));
+  };
+
+  const saveAccount = () =>
+    run(() => updateOwnProfile({ name: accountName.trim(), photo: accountPhoto }), {
+      success: 'Your account was updated',
+      onDone: ({ admin: updated }) => {
+        updateCachedAdmin(updated);
+        setAccountPhoto(null);
+        setAccountPhotoPreview(null);
+      },
+    });
 
   /**
    * Unsaved edits, if any.
@@ -170,7 +207,13 @@ export function SettingsPage({ notify }) {
   const [edits, setEdits] = useState(null);
 
   const settings = useApi(() => getSettings(), []);
+  const integrations = useApi(() => listIntegrations(), [], { skip: tab !== 'thirdParty' });
+  const thirdParties = useApi(() => listThirdParties(), [], { skip: tab !== 'thirdParty' });
   const tickets = useApi(() => listTickets({ limit: 100 }), [], { skip: tab !== 'support' });
+
+  const integrationByProvider = Object.fromEntries(
+    (integrations.data?.integrations ?? []).map((row) => [row.provider, row]),
+  );
 
   const form = edits ?? settings.data?.settings ?? null;
 
@@ -182,6 +225,8 @@ export function SettingsPage({ notify }) {
     });
 
   const canManage = can('settings.manage');
+  /** PATCH /admin/support-tickets/:id itself requires this — not settings.manage. */
+  const canResolveTickets = can('consultations.manage');
 
   const setNumber = (key) => (event) =>
     setForm((current) => ({ ...current, [key]: event.target.value }));
@@ -197,7 +242,6 @@ export function SettingsPage({ notify }) {
           minRecharge: Number(form.minRecharge),
           maxRecharge: Number(form.maxRecharge),
           minPayout: Number(form.minPayout),
-          freeTrialMinutes: Number(form.freeTrialMinutes),
           payoutCycle: form.payoutCycle,
           features: form.features,
         }),
@@ -217,19 +261,20 @@ export function SettingsPage({ notify }) {
     setConfiguring(providerKey);
   };
 
-  const saveProviderConfig = () => {
-    const provider = THIRD_PARTY_PROVIDERS.find((item) => item.key === configuring);
-    setProviderData((current) => ({
-      ...current,
-      [configuring]: {
-        enabled: true,
-        values: { ...current[configuring].values, ...providerForm },
-        updatedAt: new Date().toISOString(),
+  const saveProviderConfig = () =>
+    run(() => saveIntegration(configuring, providerForm), {
+      success: `${THIRD_PARTY_PROVIDERS.find((item) => item.key === configuring)?.name} configuration saved`,
+      onDone: async () => {
+        setConfiguring(null);
+        await integrations.reload();
       },
-    }));
-    notify(`${provider.name} configuration saved`);
-    setConfiguring(null);
-  };
+    });
+
+  const toggleIntegration = (provider, enabled) =>
+    run(() => setIntegrationEnabled(provider, enabled), {
+      success: enabled ? 'Integration enabled' : 'Integration disabled',
+      onDone: integrations.reload,
+    });
 
   const openAddThirdParty = () => {
     setThirdPartyForm(BLANK_THIRD_PARTY);
@@ -244,33 +289,28 @@ export function SettingsPage({ notify }) {
       enabled: row.enabled,
       notes: row.notes,
     });
-    setThirdPartyModal(row.id);
+    setThirdPartyModal(row._id);
   };
 
   const saveThirdParty = () => {
-    if (thirdPartyModal === 'add') {
-      setThirdParties((current) => [
-        ...current,
-        { id: crypto.randomUUID(), ...thirdPartyForm, name: thirdPartyForm.name.trim() },
-      ]);
-      notify('Third party added');
-    } else {
-      setThirdParties((current) =>
-        current.map((item) =>
-          item.id === thirdPartyModal
-            ? { ...item, ...thirdPartyForm, name: thirdPartyForm.name.trim() }
-            : item,
-        ),
-      );
-      notify('Third party updated');
-    }
-    setThirdPartyModal(null);
+    const body = { ...thirdPartyForm, name: thirdPartyForm.name.trim() };
+    return run(
+      () => (thirdPartyModal === 'add' ? createThirdParty(body) : updateThirdParty(thirdPartyModal, body)),
+      {
+        success: thirdPartyModal === 'add' ? 'Third party added' : 'Third party updated',
+        onDone: async () => {
+          setThirdPartyModal(null);
+          await thirdParties.reload();
+        },
+      },
+    );
   };
 
-  const removeThirdParty = (row) => {
-    setThirdParties((current) => current.filter((item) => item.id !== row.id));
-    notify(`${row.name} removed`);
-  };
+  const removeThirdParty = (row) =>
+    run(() => deleteThirdParty(row._id), {
+      success: `${row.name} removed`,
+      onDone: thirdParties.reload,
+    });
 
   const answerTicket = () =>
     run(() => resolveTicket(answering._id, { status: 'resolved', resolution: resolution.trim() }), {
@@ -370,7 +410,7 @@ export function SettingsPage({ notify }) {
       label: '',
       align: 'actions',
       render: (row) =>
-        row.status !== 'resolved' && row.status !== 'closed' ? (
+        canResolveTickets && row.status !== 'resolved' && row.status !== 'closed' ? (
           <RowActions
             actions={[
               {
@@ -391,8 +431,12 @@ export function SettingsPage({ notify }) {
   return (
     <div className="page">
       <PageHeader
-        title="Platform Administration"
-        subtitle="Commission, access control and the switches the apps read"
+        title={tab === 'account' ? 'My Account' : 'Platform Administration'}
+        subtitle={
+          tab === 'account'
+            ? 'Your name and photo, as they show up across this console'
+            : 'Commission, access control and the switches the apps read'
+        }
         actions={
           <>
             <Tabs value={tab} onChange={setTab} items={TABS} />
@@ -404,6 +448,50 @@ export function SettingsPage({ notify }) {
           </>
         }
       />
+
+      {tab === 'account' && (
+        <Card title="Profile" subtitle="Shown in the topbar and on anything you review or approve">
+          <div className="row" style={{ gap: 20, alignItems: 'center', marginBottom: 20 }}>
+            <Avatar name={accountName || admin?.name} src={accountPhotoPreview || admin?.avatarUrl} size="lg" round />
+            <div className="stack" style={{ gap: 6 }}>
+              <label className="btn btn--ghost btn--sm" style={{ cursor: 'pointer', width: 'fit-content' }}>
+                Change photo
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={pickAccountPhoto}
+                  style={{ display: 'none' }}
+                />
+              </label>
+              {accountPhoto && (
+                <span className="faint" style={{ fontSize: 11.5 }}>
+                  {accountPhoto.name}
+                </span>
+              )}
+            </div>
+          </div>
+
+          <div className="grid grid--2" style={{ gap: 14, maxWidth: 480 }}>
+            <Field label="Name">
+              <Input value={accountName} onChange={(event) => setAccountName(event.target.value)} />
+            </Field>
+            <Field label="Email" hint="Contact a super admin to change your sign-in email">
+              <Input value={admin?.email || ''} disabled />
+            </Field>
+          </div>
+
+          <div style={{ marginTop: 18 }}>
+            <Button
+              variant="primary"
+              icon="check"
+              disabled={busy || !accountName.trim()}
+              onClick={saveAccount}
+            >
+              Save changes
+            </Button>
+          </div>
+        </Card>
+      )}
 
       {tab === 'platform' &&
         (!form ? (
@@ -432,14 +520,6 @@ export function SettingsPage({ notify }) {
                   </Field>
                   <Field label="Minimum payout (₹)">
                     <Input type="number" min="1" value={form.minPayout} onChange={setNumber('minPayout')} />
-                  </Field>
-                  <Field label="Free trial minutes" hint="First consultation only">
-                    <Input
-                      type="number"
-                      min="0"
-                      value={form.freeTrialMinutes}
-                      onChange={setNumber('freeTrialMinutes')}
-                    />
                   </Field>
                   <Field label="Payout cycle">
                     <Select
@@ -564,43 +644,63 @@ export function SettingsPage({ notify }) {
 
       {tab === 'thirdParty' && (
         <div className="stack" style={{ gap: 16 }}>
-          <div className="grid grid--3" style={{ gap: 14 }}>
-            {THIRD_PARTY_PROVIDERS.map((provider) => {
-              const state = providerData[provider.key];
-              return (
-                <Card key={provider.key} title={provider.name} subtitle={provider.subtitle}>
-                  <div className="row row--between" style={{ marginBottom: 12 }}>
-                    <StatusBadge status={state.enabled ? 'active' : 'inactive'} />
-                    {canManage && (
-                      <Button size="sm" icon="edit" onClick={() => openConfigure(provider.key)}>
-                        {state.enabled ? 'Update' : 'Configure'}
-                      </Button>
+          {integrations.loading && !integrations.data ? (
+            <Card>
+              <LoadingBlock />
+            </Card>
+          ) : (
+            <div className="grid grid--3" style={{ gap: 14 }}>
+              {THIRD_PARTY_PROVIDERS.map((provider) => {
+                const state = integrationByProvider[provider.key] ?? { enabled: false, values: {}, updatedAt: null };
+                const configured = provider.fields.some((field) => state.values?.[field.key]);
+                return (
+                  <Card key={provider.key} title={provider.name} subtitle={provider.subtitle}>
+                    <div className="row row--between" style={{ marginBottom: 12 }}>
+                      <StatusBadge status={state.enabled && configured ? 'active' : 'inactive'} />
+                      <div className="row" style={{ gap: 8 }}>
+                        {canManage && configured && (
+                          <Button
+                            size="sm"
+                            onClick={() => toggleIntegration(provider.key, !state.enabled)}
+                          >
+                            {state.enabled ? 'Disable' : 'Enable'}
+                          </Button>
+                        )}
+                        {canManage && (
+                          <Button size="sm" icon="edit" onClick={() => openConfigure(provider.key)}>
+                            {configured ? 'Update' : 'Configure'}
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                    {configured ? (
+                      <DetailList
+                        rows={[
+                          ...provider.fields.map((field) => ({
+                            label: field.label,
+                            value: state.values?.[field.key] || '—',
+                          })),
+                          { label: 'Last updated', value: state.updatedAt ? dateTime(state.updatedAt) : '—' },
+                        ]}
+                      />
+                    ) : (
+                      <Note tone="info" icon="info">
+                        Not configured yet.
+                      </Note>
                     )}
-                  </div>
-                  {state.enabled ? (
-                    <DetailList
-                      rows={[
-                        ...provider.fields.map((field) => ({
-                          label: field.label,
-                          value: maskValue(state.values[field.key]),
-                        })),
-                        { label: 'Last updated', value: dateTime(state.updatedAt) },
-                      ]}
-                    />
-                  ) : (
-                    <Note tone="info" icon="info">
-                      Not configured yet.
-                    </Note>
-                  )}
-                </Card>
-              );
-            })}
-          </div>
+                  </Card>
+                );
+              })}
+            </div>
+          )}
 
           <Card title="Other third parties" subtitle="Anything not listed above">
             <DataTable
               columns={thirdPartyColumns}
-              rows={thirdParties}
+              rows={thirdParties.data?.items ?? []}
+              loading={thirdParties.loading}
+              error={thirdParties.error}
+              onRetry={thirdParties.reload}
               searchKeys={['name', 'identifier']}
               searchPlaceholder="Search third parties…"
               toolbarEnd={
@@ -631,15 +731,18 @@ export function SettingsPage({ notify }) {
 
       {configuring && (() => {
         const provider = THIRD_PARTY_PROVIDERS.find((item) => item.key === configuring);
+        const configured = provider.fields.some(
+          (field) => integrationByProvider[configuring]?.values?.[field.key],
+        );
         return (
           <Modal
-            title={`${providerData[configuring].enabled ? 'Update' : 'Configure'} ${provider.name}`}
+            title={`${configured ? 'Update' : 'Configure'} ${provider.name}`}
             subtitle="Credentials are stored securely and are not shown again after saving"
             onClose={() => setConfiguring(null)}
             footer={
               <>
                 <Button onClick={() => setConfiguring(null)}>Cancel</Button>
-                <Button variant="primary" icon="check" onClick={saveProviderConfig}>
+                <Button variant="primary" icon="check" disabled={busy} onClick={saveProviderConfig}>
                   Save configuration
                 </Button>
               </>
@@ -693,7 +796,7 @@ export function SettingsPage({ notify }) {
       {thirdPartyModal && (
         <Modal
           title={thirdPartyModal === 'add' ? 'Add a third party' : 'Edit third party'}
-          subtitle="Shown here for reference — not yet wired to a live integration"
+          subtitle="Kept for reference only — this record is not used to call any live service"
           onClose={() => setThirdPartyModal(null)}
           footer={
             <>
@@ -701,7 +804,7 @@ export function SettingsPage({ notify }) {
               <Button
                 variant="primary"
                 icon="check"
-                disabled={!thirdPartyForm.name.trim()}
+                disabled={busy || !thirdPartyForm.name.trim()}
                 onClick={saveThirdParty}
               >
                 {thirdPartyModal === 'add' ? 'Add third party' : 'Save changes'}

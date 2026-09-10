@@ -12,7 +12,6 @@ import { DataTable, RowActions } from '../components/DataTable';
 import { Icon } from '../components/Icon';
 import { PageHeader } from '../components/Shell';
 import {
-  Badge,
   Button,
   Chips,
   DetailList,
@@ -143,7 +142,6 @@ export function UsersPage({ notify }) {
       render: (row) => (
         <div className="row" style={{ gap: 6 }}>
           <StatusBadge status={row.status} />
-          {!row.verified && <Badge tone="warning">Unverified</Badge>}
         </div>
       ),
     },
@@ -274,9 +272,6 @@ export function UsersPage({ notify }) {
                 />
                 <div className="row" style={{ gap: 6 }}>
                   <StatusBadge status={open.status} />
-                  <Badge tone={open.verified ? 'success' : 'warning'}>
-                    {open.verified ? 'Verified' : 'Unverified'}
-                  </Badge>
                 </div>
               </div>
 
@@ -317,12 +312,6 @@ export function UsersPage({ notify }) {
                     { label: 'Email', value: open.email || '—' },
                     { label: 'Signed up via', value: signupLabel(open.signup) },
                     { label: 'Last active', value: relative(open.lastActive) },
-                    {
-                      label: 'Free consultation',
-                      value: open.freeConsultation?.isUsed
-                        ? 'Used'
-                        : `${open.freeConsultation?.minutes ?? 0} minutes left`,
-                    },
                   ]}
                 />
               </section>

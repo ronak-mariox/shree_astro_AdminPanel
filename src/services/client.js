@@ -14,9 +14,10 @@ import { clearSession, getAccessToken, getRefreshToken, setTokens } from './sess
  * `VITE_API_URL` overrides it for a deployed build; in development the panel and
  * the API run on the same machine.
  */
-// 'http://localhost:5000/api/v1' 
 export const API_BASE_URL =
-  import.meta.env.VITE_API_URL ||  "https://shree-astro-backend.vercel.app/api/v1";
+  import.meta.env.VITE_API_URL || 'http://localhost:5000/api/v1' ;
+
+  // "https://shree-astro-backend.vercel.app/api/v1";
 
 /** What a page catches: a message worth showing, and the reason behind it. */
 export class ApiError extends Error {
@@ -96,7 +97,13 @@ async function request(method, path, { body, query, auth = true, retried = false
   if (auth && token) {
     headers.Authorization = `Bearer ${token}`;
   }
-  if (body !== undefined) {
+  /**
+   * A `FormData` body (a photo upload) must carry the boundary the browser
+   * generates for it, so the header is left for `fetch` to write; anything
+   * else is JSON.
+   */
+  const isFormData = typeof FormData !== 'undefined' && body instanceof FormData;
+  if (body !== undefined && !isFormData) {
     headers['Content-Type'] = 'application/json';
   }
 
@@ -105,7 +112,7 @@ async function request(method, path, { body, query, auth = true, retried = false
     response = await fetch(`${API_BASE_URL}${path}${queryString(query)}`, {
       method,
       headers,
-      body: body === undefined ? undefined : JSON.stringify(body),
+      body: body === undefined ? undefined : isFormData ? body : JSON.stringify(body),
     });
   } catch {
     /** No response at all — the API is not running, or the network is down. */

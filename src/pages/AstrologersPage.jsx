@@ -3,10 +3,9 @@
  * document checks, and the per-astrologer rates, commission and earnings the
  * astrologer app reads back.
  *
- * Two kinds of row end up here. An astrologer who **applied** arrives as an
- * application to review. An astrologer an admin **created** is approved from the
- * moment they exist — the short form asks only for an email, the commission and
- * whether they are listed, and they fill in the rest from their own app.
+ * Every row here applied through the astrologer app's own registration
+ * wizard and arrives as an application to review — there is no admin-side
+ * "create an astrologer" shortcut.
  */
 
 import { useState } from 'react';
@@ -26,7 +25,6 @@ import {
   Modal,
   Note,
   Progress,
-  Select,
   StatCard,
   StatusBadge,
   Textarea,
@@ -34,7 +32,6 @@ import {
 import { useAction, useApi } from '../hooks/useApi';
 import {
   approveAstrologer,
-  createAstrologer,
   getAstrologer,
   getDashboard,
   listAstrologers,
@@ -53,33 +50,43 @@ import { count, date, label, money, orDash, phone as formatPhone } from '../util
  * "Applications" is everything short of a decision — the wizard states an
  * astrologer walks through before an admin sees them.
  */
+/**
+ * Every stage short of a decision — the wizard states an astrologer walks
+ * through before an admin approves or rejects them. Document/bank-account
+ * review never moves `applicationStatus` on its own (that's a fully separate
+ * action — see `submitApproval`), so an astrologer can sit in any of these
+ * for a while; the Approve/Reject actions below need to reach all of them,
+ * not just the last one, or an admin reviewing documents on an
+ * earlier-stage application would have no way to actually approve it.
+ */
+const PENDING_STATUSES = [
+  'registered',
+  'personal_submitted',
+  'professional_submitted',
+  'documents_submitted',
+  'bank_submitted',
+  'under_review',
+];
+const isPendingReview = (applicationStatus) => PENDING_STATUSES.includes(applicationStatus);
+
 const FILTERS = [
   { key: 'all', label: 'All', query: {} },
   { key: 'approved', label: 'Approved', query: { applicationStatus: 'approved', status: 'active' } },
-  { key: 'pending', label: 'Pending', query: { applicationStatus: 'under_review' } },
+  { key: 'pending', label: 'Pending', query: { applicationStatus: PENDING_STATUSES.join(',') } },
   { key: 'blocked', label: 'Blocked', query: { status: 'blocked' } },
 ];
 
 const REVIEW_TONE = { approved: 'success', pending: 'warning', rejected: 'danger' };
 
-/** A listed astrologer is either approved or blocked — nothing in between. */
-const LISTING_STATUS = [
-  { value: 'approved', label: 'Approved · listed on the marketplace' },
-  { value: 'blocked', label: 'Blocked · hidden from the apps' },
-];
-
-/**
- * The short form.
- *
- * Only what an admin decides: who they are, the platform's cut and whether they
- * are listed. Everything else — mobile number, expertise, languages, rates and
- * availability — the astrologer fills in from their own profile once they sign
- * in with this email address.
- */
-const BLANK_DRAFT = { email: '', commission: '25', status: 'approved' };
-
 /** Opening rates, offered when approving an application. */
-const BLANK_APPROVAL = { chatRate: '20', callRate: '30', freeMinutes: '3', commission: '25' };
+const BLANK_APPROVAL = { chatRate: '20', callRate: '30', commission: '25' };
+
+/** Both rates must be real money and the commission a real percentage — an astrologer cannot take work priced at ₹0/negative, or split earnings outside 0–100%. */
+const isApprovalValid = (approval) =>
+  Number(approval.chatRate) > 0 &&
+  Number(approval.callRate) > 0 &&
+  Number(approval.commission) >= 0 &&
+  Number(approval.commission) <= 100;
 
 const PAGE_LIMIT = 100;
 
@@ -88,7 +95,6 @@ export function AstrologersPage({ notify }) {
   const [openId, setOpenId] = useState(null);
   const [rejecting, setRejecting] = useState(null);
   const [reason, setReason] = useState('');
-  const [draft, setDraft] = useState(null);
   const [approval, setApproval] = useState(null);
   const [run, busy] = useAction(notify);
 
@@ -129,7 +135,6 @@ export function AstrologersPage({ notify }) {
             {
               type: 'chat',
               ratePerMinute: Number(approval.chatRate),
-              freeMinutes: Number(approval.freeMinutes) || 0,
               isEnabled: true,
             },
             { type: 'call', ratePerMinute: Number(approval.callRate), isEnabled: true },
@@ -155,32 +160,6 @@ export function AstrologersPage({ notify }) {
       },
     });
 
-  const createFromForm = () =>
-    run(
-      () =>
-        createAstrologer({
-          email: draft.email.trim(),
-          commissionPercent: Number(draft.commission),
-          status: draft.status,
-        }),
-      {
-        success: 'Astrologer created — they sign in with that email',
-        onDone: async () => {
-          setDraft(null);
-          await reload();
-        },
-      },
-    );
-
-  const setDraftField = (key) => (event) =>
-    setDraft((current) => ({ ...current, [key]: event.target.value }));
-
-  const draftValid =
-    draft &&
-    /^\S+@\S+\.\S+$/.test(draft.email.trim()) &&
-    Number(draft.commission) >= 0 &&
-    Number(draft.commission) <= 100;
-
   const columns = [
     {
       key: 'name',
@@ -189,7 +168,10 @@ export function AstrologersPage({ notify }) {
       render: (row) => (
         <Identity
           name={row.name}
-          meta={label(row.expertise) || row.email}
+          src={row.photoUrl}
+          meta={[row.astroCode, label(row.expertise) || row.phone || row.email]
+            .filter(Boolean)
+            .join(' · ')}
           online={row.applicationStatus === 'approved' ? row.online : undefined}
         />
       ),
@@ -216,25 +198,6 @@ export function AstrologersPage({ notify }) {
           </span>
         ) : (
           <span className="faint">Not set</span>
-        ),
-    },
-    {
-      key: 'rating',
-      label: 'Rating',
-      sortable: true,
-      render: (row) =>
-        row.rating ? (
-          <span className="row" style={{ gap: 4 }}>
-            <span style={{ color: '#FFBF00' }}>
-              <Icon name="star" size={13} strokeWidth={2} />
-            </span>
-            <span className="mono strong">{row.rating}</span>
-            <span className="faint" style={{ fontSize: 11 }}>
-              ({row.ratingCount})
-            </span>
-          </span>
-        ) : (
-          <span className="faint">—</span>
         ),
     },
     {
@@ -268,7 +231,7 @@ export function AstrologersPage({ notify }) {
       render: (row) => (
         <RowActions
           actions={
-            row.applicationStatus === 'under_review'
+            isPendingReview(row.applicationStatus)
               ? [
                   { label: 'Review', icon: 'eye', onClick: () => setOpenId(row.id) },
                   ...(canApprove
@@ -320,16 +283,7 @@ export function AstrologersPage({ notify }) {
       <PageHeader
         title="Astrologer Management"
         subtitle="Approve applications, verify documents and manage the marketplace listing"
-        actions={
-          <>
-            <Button icon="refresh" onClick={reload}>Refresh</Button>
-            {canManage && (
-              <Button variant="primary" icon="plus" onClick={() => setDraft(BLANK_DRAFT)}>
-                Create astrologer
-              </Button>
-            )}
-          </>
-        }
+        actions={<Button icon="refresh" onClick={reload}>Refresh</Button>}
       />
 
       <div className="grid grid--stats" style={{ marginBottom: 16 }}>
@@ -392,7 +346,7 @@ export function AstrologersPage({ notify }) {
           subtitle={open ? `${open.astroCode || ''} · joined ${date(open.createdAt)}` : ''}
           onClose={() => setOpenId(null)}
           footer={
-            open && open.applicationStatus === 'under_review' ? (
+            open && isPendingReview(open.applicationStatus) ? (
               canApprove && (
                 <>
                   <Button variant="danger" icon="x" onClick={() => setRejecting(open)}>
@@ -528,7 +482,7 @@ export function AstrologersPage({ notify }) {
                             {request.reason || 'No reason given'}
                           </p>
                         </div>
-                        {canManage && (
+                        {canApprove && (
                           <>
                             <Button
                               size="sm"
@@ -705,7 +659,7 @@ export function AstrologersPage({ notify }) {
               <Button
                 variant="primary"
                 icon="check"
-                disabled={busy || !(Number(approval.chatRate) > 0)}
+                disabled={busy || !isApprovalValid(approval)}
                 onClick={submitApproval}
               >
                 Approve &amp; publish
@@ -742,32 +696,20 @@ export function AstrologersPage({ notify }) {
               </Field>
             </div>
 
-            <div className="grid grid--2" style={{ gap: 14 }}>
-              <Field label="Free minutes" hint="For a seeker's first consultation">
-                <Input
-                  type="number"
-                  min="0"
-                  value={approval.freeMinutes}
-                  onChange={(event) =>
-                    setApproval((current) => ({ ...current, freeMinutes: event.target.value }))
-                  }
-                />
-              </Field>
-              <Field
-                label="Platform commission (%)"
-                hint={`Astrologer keeps ${100 - (Number(approval.commission) || 0)}%`}
-              >
-                <Input
-                  type="number"
-                  min="0"
-                  max="100"
-                  value={approval.commission}
-                  onChange={(event) =>
-                    setApproval((current) => ({ ...current, commission: event.target.value }))
-                  }
-                />
-              </Field>
-            </div>
+            <Field
+              label="Platform commission (%)"
+              hint={`Astrologer keeps ${100 - (Number(approval.commission) || 0)}%`}
+            >
+              <Input
+                type="number"
+                min="0"
+                max="100"
+                value={approval.commission}
+                onChange={(event) =>
+                  setApproval((current) => ({ ...current, commission: event.target.value }))
+                }
+              />
+            </Field>
           </div>
         </Modal>
       )}
@@ -819,58 +761,6 @@ export function AstrologersPage({ notify }) {
         </Modal>
       )}
 
-      {draft && (
-        <Modal
-          title="Create astrologer"
-          subtitle="Adds the account directly — no application step"
-          onClose={() => setDraft(null)}
-          footer={
-            <>
-              <Button onClick={() => setDraft(null)}>Cancel</Button>
-              <Button variant="primary" icon="check" disabled={!draftValid || busy} onClick={createFromForm}>
-                Create astrologer
-              </Button>
-            </>
-          }
-        >
-          <div className="stack" style={{ gap: 16 }}>
-            <Note tone="info" icon="info">
-              The astrologer completes their own profile — name, mobile number, expertise,
-              languages, rates and availability — after signing in with this email. They are
-              not listed to seekers until they have set a rate.
-            </Note>
-
-            <Field label="Email address" hint="Used for the astrologer app sign-in">
-              <Input
-                type="email"
-                placeholder="name@shreeastro.com"
-                value={draft.email}
-                onChange={setDraftField('email')}
-              />
-            </Field>
-
-            <Field
-              label="Platform commission (%)"
-              hint={`Astrologer keeps ${100 - (Number(draft.commission) || 0)}%`}
-            >
-              <Input
-                type="number"
-                min="0"
-                max="100"
-                value={draft.commission}
-                onChange={setDraftField('commission')}
-              />
-            </Field>
-
-            <Field
-              label="Status"
-              hint="Approved profiles appear in the apps straight away; blocked ones stay hidden"
-            >
-              <Select value={draft.status} onChange={setDraftField('status')} options={LISTING_STATUS} />
-            </Field>
-          </div>
-        </Modal>
-      )}
     </div>
   );
 }

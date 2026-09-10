@@ -7,7 +7,10 @@
 export const navGroups = [
   {
     label: 'Overview',
-    items: [{ key: 'dashboard', label: 'Dashboard', icon: 'dashboard' }],
+    items: [
+      { key: 'dashboard', label: 'Dashboard', icon: 'dashboard' },
+      { key: 'notifications', label: 'Notifications', icon: 'bell' },
+    ],
   },
   {
     label: 'People',
@@ -43,6 +46,7 @@ export const navGroups = [
 /** Flat lookup — the topbar reads the crumb trail off this. */
 export const routeTitles = {
   dashboard: { title: 'Dashboard', group: 'Overview' },
+  notifications: { title: 'Notifications', group: 'Overview' },
   users: { title: 'User Management', group: 'People' },
   astrologers: { title: 'Astrologer Management', group: 'People' },
   consultations: { title: 'Consultation Monitoring', group: 'People' },

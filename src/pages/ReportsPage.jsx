@@ -41,7 +41,13 @@ export function ReportsPage() {
   const [range, setRange] = useState('30');
 
   const { data, loading, error, reload } = useApi(() => getReports(Number(range)), [range]);
-  const { data: summary } = useApi(() => getDashboard(7), []);
+  const { data: summary, reload: reloadSummary } = useApi(() => getDashboard(7), []);
+
+  /** Refresh means every number on this page, not just the range-scoped ones — the consultation-mix card is fed by a separate call. */
+  const reloadAll = () => {
+    reload();
+    reloadSummary();
+  };
 
   const totals = data?.summary;
 
@@ -83,7 +89,7 @@ export function ReportsPage() {
         actions={
           <>
             <Tabs value={range} onChange={setRange} items={RANGES} />
-            <Button icon="refresh" onClick={reload}>
+            <Button icon="refresh" onClick={reloadAll}>
               Refresh
             </Button>
           </>

@@ -18,6 +18,7 @@ import ContentPage from './pages/ContentPage';
 import DashboardPage from './pages/DashboardPage';
 import LoginPage from './pages/LoginPage';
 import AuditLogsPage from './pages/AuditLogsPage';
+import NotificationsPage from './pages/NotificationsPage';
 import PaymentsPage from './pages/PaymentsPage';
 import ReportsPage from './pages/ReportsPage';
 import SettingsPage from './pages/SettingsPage';
@@ -26,6 +27,7 @@ import WalletsPage from './pages/WalletsPage';
 
 const PAGES = {
   dashboard: DashboardPage,
+  notifications: NotificationsPage,
   users: UsersPage,
   astrologers: AstrologersPage,
   consultations: ConsultationsPage,
@@ -43,6 +45,8 @@ export default function App() {
   const [collapsed, setCollapsed] = useState(false);
   const [route, navigate] = useHashRoute('dashboard');
   const [toasts, notify] = useToasts();
+  /** Bumped by the topbar's "Refresh data" button — folded into the current page's `key` below so React remounts it from scratch, same as switching routes does. */
+  const [refreshTick, setRefreshTick] = useState(0);
 
   /**
    * A session can also end without anyone pressing anything: a refresh token
@@ -78,9 +82,10 @@ export default function App() {
           onToggle={() => setCollapsed((value) => !value)}
           onNavigate={navigate}
           onSignOut={signOut}
+          onRefresh={() => setRefreshTick((tick) => tick + 1)}
           admin={admin}
         />
-        <Page key={route} onNavigate={navigate} notify={notify} admin={admin} />
+        <Page key={`${route}-${refreshTick}`} onNavigate={navigate} notify={notify} admin={admin} />
       </div>
 
       <Toasts items={toasts} />

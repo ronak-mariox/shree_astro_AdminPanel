@@ -77,6 +77,17 @@ export function setTokens({ accessToken, refreshToken }) {
   }
 }
 
+/**
+ * Merges a change into the cached admin — after the admin updates their own
+ * name/photo, so the topbar reflects it without a re-login. `write()` notifies
+ * every `onSessionChange` listener, and `App.jsx` already re-renders off one.
+ */
+export function updateCachedAdmin(patch) {
+  if (session) {
+    write({ ...session, admin: { ...session.admin, ...patch } });
+  }
+}
+
 export function clearSession() {
   write(null);
 }

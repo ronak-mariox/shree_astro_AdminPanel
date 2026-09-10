@@ -10,7 +10,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { BrandMark, Icon } from '../components/Icon';
 import { Button, Checkbox, Field, Input, Note } from '../components/ui';
-import { completeSignIn, resendOtp, signIn, verifyOtp } from '../services/admin';
+import {
+  completeSignIn,
+  confirmPasswordReset,
+  requestPasswordReset,
+  resendOtp,
+  resendPasswordReset,
+  signIn,
+  verifyOtp,
+} from '../services/admin';
 
 /** Seeded by `npm run seed:admin`; shown as a hint on the form. */
 const SEEDED = { email: 'admin@shreeastro.com', password: 'admin@123' };
@@ -145,8 +153,16 @@ export function LoginPage({ onAuthenticated }) {
    */
   const [devCode, setDevCode] = useState(null);
 
+  /** Forgotten password: its own code + new password, once the 'reset' step is reached. */
+  const [resetCode, setResetCode] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  /** Shown once, back on the credentials form, after a successful reset. */
+  const [resetDone, setResetDone] = useState(false);
+
   useEffect(() => {
-    if (step !== 'otp' || seconds === 0) return undefined;
+    if ((step !== 'otp' && step !== 'reset') || seconds === 0) return undefined;
     const timer = setTimeout(() => setSeconds((value) => value - 1), 1000);
     return () => clearTimeout(timer);
   }, [step, seconds]);
@@ -226,6 +242,79 @@ export function LoginPage({ onAuthenticated }) {
     }
   };
 
+  /**
+   * Forgotten password, step one. The API answers the same shape whether or
+   * not the address belongs to an admin, so there is nothing to branch on
+   * here beyond "the request itself failed" (network, validation) — it always
+   * moves on to the code screen.
+   */
+  const submitForgotPassword = async (event) => {
+    event.preventDefault();
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      setErrors({ email: 'Enter a valid email address' });
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const sent = await requestPasswordReset(email.trim());
+      setStep('reset');
+      setResetCode('');
+      setNewPassword('');
+      setConfirmPassword('');
+      setSeconds(sent.resendInSeconds || 30);
+      setDevCode(sent.devCode || null);
+      setErrors({});
+    } catch (error) {
+      setErrors({ email: error.message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const resendReset = async () => {
+    if (seconds > 0) return;
+    try {
+      const sent = await resendPasswordReset(email.trim());
+      setSeconds(sent.resendInSeconds || 30);
+      setDevCode(sent.devCode || null);
+      setResetCode('');
+      setErrors({});
+    } catch (error) {
+      setErrors({ resetCode: error.message });
+    }
+  };
+
+  /** Forgotten password, step two: the emailed code and a new password. */
+  const submitResetPassword = async (event) => {
+    event.preventDefault();
+
+    const next = {};
+    if (resetCode.length < OTP_LENGTH) next.resetCode = 'Enter all six digits';
+    if (newPassword.length < 6) next.newPassword = 'Password must be at least 6 characters';
+    if (confirmPassword !== newPassword) next.confirmPassword = 'Passwords do not match';
+    setErrors(next);
+    if (Object.keys(next).length) return;
+
+    setBusy(true);
+    try {
+      await confirmPasswordReset(email.trim(), resetCode, newPassword);
+      setStep('credentials');
+      setPassword('');
+      setOtp('');
+      setResetCode('');
+      setNewPassword('');
+      setConfirmPassword('');
+      setErrors({});
+      setResetDone(true);
+    } catch (error) {
+      setErrors({ resetCode: error.message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <main className="login">
       <CosmicPanel />
@@ -292,7 +381,15 @@ export function LoginPage({ onAuthenticated }) {
                     checked={remember}
                     onChange={(event) => setRemember(event.target.checked)}
                   />
-                  <button type="button" className="login__link">
+                  <button
+                    type="button"
+                    className="login__link"
+                    onClick={() => {
+                      setStep('forgot');
+                      setErrors({});
+                      setResetDone(false);
+                    }}
+                  >
                     Forgot password?
                   </button>
                 </div>
@@ -301,11 +398,146 @@ export function LoginPage({ onAuthenticated }) {
                   {busy ? 'Verifying…' : 'Continue'}
                   {!busy && <Icon name="chevronRight" size={16} />}
                 </Button>
+
+                {resetDone && (
+                  <Note tone="success" icon="check">
+                    Password reset. Sign in with your new password.
+                  </Note>
+                )}
               </div>
 
               <p className="login__hint">
                 Seeded by <strong>npm run seed:admin</strong> — {SEEDED.email} / {SEEDED.password}
               </p>
+            </form>
+          ) : step === 'forgot' ? (
+            <form onSubmit={submitForgotPassword} noValidate>
+              <header className="login__head">
+                <button
+                  type="button"
+                  className="login__back"
+                  onClick={() => {
+                    setStep('credentials');
+                    setErrors({});
+                  }}
+                >
+                  <Icon name="arrowLeft" size={16} /> Back
+                </button>
+                <h1>Reset your password</h1>
+                <p>Enter your account email and we&rsquo;ll send a six-digit code to it.</p>
+              </header>
+
+              <div className="stack" style={{ gap: 16 }}>
+                <Field label="Email address" error={errors.email} htmlFor="forgot-email">
+                  <Input
+                    id="forgot-email"
+                    icon="mail"
+                    type="email"
+                    autoComplete="username"
+                    placeholder="you@shreeastro.com"
+                    value={email}
+                    invalid={Boolean(errors.email)}
+                    onChange={(event) => setEmail(event.target.value)}
+                  />
+                </Field>
+
+                <Button variant="primary" size="lg" block type="submit" disabled={busy}>
+                  {busy ? 'Sending…' : 'Send reset code'}
+                  {!busy && <Icon name="chevronRight" size={16} />}
+                </Button>
+              </div>
+            </form>
+          ) : step === 'reset' ? (
+            <form onSubmit={submitResetPassword} noValidate>
+              <header className="login__head">
+                <button
+                  type="button"
+                  className="login__back"
+                  onClick={() => {
+                    setStep('forgot');
+                    setErrors({});
+                  }}
+                >
+                  <Icon name="arrowLeft" size={16} /> Back
+                </button>
+                <h1>Choose a new password</h1>
+                <p>
+                  We sent a six-digit code to <strong>{masked}</strong>.
+                </p>
+              </header>
+
+              <div className="stack" style={{ gap: 18 }}>
+                <OtpBoxes value={resetCode} onChange={setResetCode} invalid={Boolean(errors.resetCode)} />
+                {errors.resetCode && (
+                  <span className="field__error">
+                    <Icon name="alert" size={13} strokeWidth={2} />
+                    {errors.resetCode}
+                  </span>
+                )}
+
+                <div className="row row--between">
+                  <span className="faint" style={{ fontSize: 12.5 }}>
+                    {seconds > 0 ? `Resend code in 0:${String(seconds).padStart(2, '0')}` : 'Didn’t get the code?'}
+                  </span>
+                  <button
+                    type="button"
+                    className="login__link"
+                    disabled={seconds > 0}
+                    style={{ opacity: seconds > 0 ? 0.45 : 1 }}
+                    onClick={resendReset}
+                  >
+                    Resend code
+                  </button>
+                </div>
+
+                <Field label="New password" error={errors.newPassword} htmlFor="new-password">
+                  <Input
+                    id="new-password"
+                    icon="lock"
+                    type={showNewPassword ? 'text' : 'password'}
+                    autoComplete="new-password"
+                    placeholder="At least 6 characters"
+                    value={newPassword}
+                    invalid={Boolean(errors.newPassword)}
+                    onChange={(event) => setNewPassword(event.target.value)}
+                    action={
+                      <button
+                        type="button"
+                        className="input-group__action"
+                        onClick={() => setShowNewPassword((shown) => !shown)}
+                        aria-label={showNewPassword ? 'Hide password' : 'Show password'}
+                      >
+                        <Icon name={showNewPassword ? 'eyeOff' : 'eye'} size={16} />
+                      </button>
+                    }
+                  />
+                </Field>
+
+                <Field label="Confirm new password" error={errors.confirmPassword} htmlFor="confirm-password">
+                  <Input
+                    id="confirm-password"
+                    icon="lock"
+                    type={showNewPassword ? 'text' : 'password'}
+                    autoComplete="new-password"
+                    placeholder="Type it again"
+                    value={confirmPassword}
+                    invalid={Boolean(errors.confirmPassword)}
+                    onChange={(event) => setConfirmPassword(event.target.value)}
+                  />
+                </Field>
+
+                <Button variant="primary" size="lg" block type="submit" disabled={busy}>
+                  {busy ? 'Resetting…' : 'Reset password'}
+                </Button>
+
+                {devCode && (
+                  <Note tone="info" icon="info">
+                    No mail transport is wired up yet, so the code is{' '}
+                    <strong>{devCode}</strong>. It is also printed to the server log,
+                    and is never returned in production.
+                  </Note>
+                )}
+              </div>
             </form>
           ) : (
             <form onSubmit={submitOtp} noValidate>

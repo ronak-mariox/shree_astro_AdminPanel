@@ -255,7 +255,15 @@
 .topbar {
   position: sticky;
   top: 0;
-  z-index: 30;
+  /**
+   * Above 39 — the user-menu's portalled backdrop catcher (Shell.jsx) is
+   * appended to document.body, so it stacks at the root level against this
+   * z-index directly, not against the menu's own (higher, but merely local)
+   * one nested inside this stacking context. Left at 30, the backdrop used
+   * to outrank the whole topbar and silently swallow every click meant for
+   * "Account settings"/"Reports"/"Sign out" before it reached them.
+   */
+  z-index: 41;
   display: flex;
   align-items: center;
   gap: var(--s-4);

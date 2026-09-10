@@ -74,7 +74,7 @@ export function Sidebar({ route, onNavigate, collapsed, onSignOut }) {
   );
 }
 
-export function Topbar({ route, collapsed, onToggle, onNavigate, onSignOut, admin }) {
+export function Topbar({ route, collapsed, onToggle, onNavigate, onSignOut, onRefresh, admin }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const crumb = routeTitles[route] || routeTitles.dashboard;
 
@@ -109,6 +109,7 @@ export function Topbar({ route, collapsed, onToggle, onNavigate, onSignOut, admi
           aria-label="Refresh data"
           title="Refresh data"
           className="icon-button"
+          onClick={onRefresh}
         />
 
         <div style={{ position: 'relative' }}>

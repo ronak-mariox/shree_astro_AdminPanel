@@ -28,6 +28,17 @@ export async function verifyOtp(email, code) {
 export const resendOtp = (email) =>
   api.post('/auth/admin/login/resend', { email }, { auth: false });
 
+/** Forgotten password, step one: asks for a code to be emailed. */
+export const requestPasswordReset = (email) =>
+  api.post('/auth/admin/forgot-password', { email }, { auth: false });
+
+export const resendPasswordReset = (email) =>
+  api.post('/auth/admin/forgot-password/resend', { email }, { auth: false });
+
+/** Step two: the emailed code and a new password. No session comes back — sign in fresh with it. */
+export const confirmPasswordReset = (email, code, password) =>
+  api.post('/auth/admin/reset-password', { email, code, password }, { auth: false });
+
 /** Saves the session for the one-step case (two-factor off). */
 export function completeSignIn(data) {
   saveSession(data);
@@ -42,6 +53,19 @@ export async function signOut() {
   }
   clearSession();
 }
+
+/* -------------------------------------------------------------------- me */
+
+/**
+ * The signed-in admin's own name and/or photo — any role may call this, no
+ * `admins.manage` needed. `photo` is the file picked in the browser, if any.
+ */
+export const updateOwnProfile = ({ name, photo }) => {
+  const form = new FormData();
+  if (name !== undefined) form.append('name', name);
+  if (photo) form.append('photo', photo);
+  return api.patch('/admin/me', form);
+};
 
 /* -------------------------------------------------------------- dashboard */
 
@@ -59,9 +83,6 @@ export const setUserStatus = (userId, status, reason) =>
 
 export const listAstrologers = (query) => api.get('/admin/astrologers', query);
 export const getAstrologer = (id) => api.get(`/admin/astrologers/${id}`);
-
-/** The short form: email, commission, availability, status. */
-export const createAstrologer = (draft) => api.post('/admin/astrologers', draft);
 
 export const approveAstrologer = (id, body) =>
   api.post(`/admin/astrologers/${id}/approve`, body);
@@ -109,6 +130,19 @@ export const deleteArticle = (id) => api.delete(`/admin/articles/${id}`);
 export const getSettings = () => api.get('/admin/settings');
 export const updateSettings = (body) => api.patch('/admin/settings', body);
 
+/** Third parties: masked values only — a saved secret never comes back in the clear. */
+export const listIntegrations = () => api.get('/admin/integrations');
+export const saveIntegration = (provider, fields) =>
+  api.put(`/admin/integrations/${provider}`, fields);
+export const setIntegrationEnabled = (provider, enabled) =>
+  api.patch(`/admin/integrations/${provider}/enabled`, { enabled });
+
+/** The "Other" list — anything not one of the six fixed providers above. Reference only, same as the field it's collected under implies. */
+export const listThirdParties = () => api.get('/admin/third-parties');
+export const createThirdParty = (body) => api.post('/admin/third-parties', body);
+export const updateThirdParty = (id, body) => api.put(`/admin/third-parties/${id}`, body);
+export const deleteThirdParty = (id) => api.delete(`/admin/third-parties/${id}`);
+
 /* -------------------------------------------------------------- the team */
 
 export const listAdmins = (query) => api.get('/admin/team', query);
@@ -124,3 +158,13 @@ export const resolveTicket = (id, body) => api.patch(`/admin/support-tickets/${i
 /* ------------------------------------------------------------------ audit */
 
 export const listAuditLogs = (query) => api.get('/admin/audit-logs', query);
+
+/* --------------------------------------------------------- notifications */
+
+/**
+ * Not under `/admin` — this is the same endpoint pair user_app and astro_app
+ * call; the account's role on the token decides whose rows come back.
+ */
+export const listNotifications = (query) => api.get('/notifications', query);
+export const markNotificationsRead = (notificationId) =>
+  api.post('/notifications/read', { notificationId });

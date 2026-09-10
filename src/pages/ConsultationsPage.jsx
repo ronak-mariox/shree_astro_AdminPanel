@@ -284,10 +284,6 @@ export function ConsultationsPage({ notify }) {
                       label: 'Billable minutes',
                       value: open.durationSeconds ? `${minutes(open.durationSeconds)} min` : '—',
                     },
-                    {
-                      label: 'Free minutes',
-                      value: open.billing.freeMinutes ? `${open.billing.freeMinutes} min` : 'None',
-                    },
                     { label: 'Charged to wallet', value: money(open.billing.amountCharged) },
                     {
                       label: 'Astrologer earning',
