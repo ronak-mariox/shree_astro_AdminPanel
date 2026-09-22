@@ -234,6 +234,29 @@ export function SettingsPage({ notify, admin }) {
   const setSwitch = (key) => (value) =>
     setForm((current) => ({ ...current, features: { ...current.features, [key]: value } }));
 
+  /**
+   * Consultation package discounts — one row per package the server offers
+   * (GET /admin/settings' `consultationPackages`), held with the rest of the
+   * unsaved edits and sent by the same "Save changes".
+   */
+  const maxDiscount = settings.data?.maxPackageDiscountPercent ?? 90;
+  const discountRows = form?.packageDiscountRows ?? settings.data?.consultationPackages ?? [];
+  const discountError = (value) => {
+    const percent = Number(value);
+    if (value === '' || !Number.isInteger(percent) || percent < 0 || percent > maxDiscount) {
+      return `A whole number from 0 to ${maxDiscount}`;
+    }
+    return undefined;
+  };
+  const discountsInvalid = discountRows.some((row) => discountError(row.discountPercent));
+  const setDiscount = (minutes) => (event) =>
+    setForm((current) => ({
+      ...current,
+      packageDiscountRows: (current.packageDiscountRows ?? settings.data?.consultationPackages ?? []).map((row) =>
+        row.minutes === minutes ? { ...row, discountPercent: event.target.value } : row,
+      ),
+    }));
+
   const save = () =>
     run(
       () =>
@@ -244,6 +267,10 @@ export function SettingsPage({ notify, admin }) {
           minPayout: Number(form.minPayout),
           payoutCycle: form.payoutCycle,
           features: form.features,
+          packageDiscounts: discountRows.map((row) => ({
+            minutes: row.minutes,
+            discountPercent: Number(row.discountPercent),
+          })),
         }),
       {
         success: 'Settings saved',
@@ -441,7 +468,7 @@ export function SettingsPage({ notify, admin }) {
           <>
             <Tabs value={tab} onChange={setTab} items={TABS} />
             {tab === 'platform' && canManage && (
-              <Button variant="primary" icon="check" disabled={busy || !form} onClick={save}>
+              <Button variant="primary" icon="check" disabled={busy || !form || discountsInvalid} onClick={save}>
                 Save changes
               </Button>
             )}
@@ -537,6 +564,51 @@ export function SettingsPage({ notify, admin }) {
                     Commission is fixed onto a consultation when it is requested, so a change
                     here applies to sessions started after saving. Sessions already running
                     keep the rate they began on.
+                  </Note>
+                </div>
+              </Card>
+
+              <Card
+                title="Consultation package discounts"
+                subtitle="Percent off each fixed-length package, for chat and call"
+              >
+                <div className="grid grid--2" style={{ gap: 14 }}>
+                  {discountRows.map((row) => {
+                    const percent = Number(row.discountPercent) || 0;
+                    const original = 20 * row.minutes;
+                    const discounted = original - Math.round((original * percent) / 100);
+                    return (
+                      <Field
+                        key={row.minutes}
+                        label={`${row.minutes}-minute package (% off)`}
+                        error={discountError(row.discountPercent)}
+                        hint={
+                          percent > 0
+                            ? `At ₹20/min: ${money(original)} → ${money(discounted)}`
+                            : `At ₹20/min: ${money(original)} (no discount)`
+                        }
+                      >
+                        <Input
+                          type="number"
+                          min="0"
+                          max={maxDiscount}
+                          step="1"
+                          value={row.discountPercent}
+                          disabled={!canManage}
+                          invalid={Boolean(discountError(row.discountPercent))}
+                          onChange={setDiscount(row.minutes)}
+                        />
+                      </Field>
+                    );
+                  })}
+                </div>
+
+                <div style={{ marginTop: 16 }}>
+                  <Note tone="info" icon="info">
+                    Seekers see the full price struck through and pay the discounted one. A price is
+                    locked when the seeker books, so a change here applies to new bookings and
+                    extensions from then on. The astrologer&apos;s share is taken from the
+                    discounted amount.
                   </Note>
                 </div>
               </Card>
