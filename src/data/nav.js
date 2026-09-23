@@ -36,6 +36,7 @@ export const navGroups = [
   {
     label: 'Operations',
     items: [
+      { key: 'disputes', label: 'Disputes', icon: 'inbox' },
       { key: 'reports', label: 'Reports', icon: 'chart' },
       { key: 'audit', label: 'Audit Logs', icon: 'shield' },
       { key: 'settings', label: 'Settings', icon: 'settings' },
@@ -53,6 +54,7 @@ export const routeTitles = {
   payments: { title: 'Payment Management', group: 'Money' },
   wallets: { title: 'Wallet Management', group: 'Money' },
   content: { title: 'Content Management', group: 'Content' },
+  disputes: { title: 'Disputes & Support', group: 'Operations' },
   reports: { title: 'Reporting & Monitoring', group: 'Operations' },
   audit: { title: 'Audit Logs', group: 'Operations' },
   settings: { title: 'Platform Administration', group: 'Operations' },

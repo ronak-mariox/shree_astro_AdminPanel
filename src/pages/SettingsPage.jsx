@@ -34,8 +34,6 @@ import {
   getSettings,
   listIntegrations,
   listThirdParties,
-  listTickets,
-  resolveTicket,
   saveIntegration,
   setIntegrationEnabled,
   updateOwnProfile,
@@ -43,13 +41,12 @@ import {
   updateThirdParty,
 } from '../services/admin';
 import { can, updateCachedAdmin } from '../services/session';
-import { dateTime, label, money } from '../utils/format';
+import { dateTime, money } from '../utils/format';
 
 const TABS = [
   { key: 'account', label: 'My Account' },
   { key: 'platform', label: 'Platform' },
   { key: 'thirdParty', label: 'Third parties' },
-  { key: 'support', label: 'Support' },
 ];
 
 /** The integrations with a dedicated credentials form. Each field left blank on save keeps its current value. */
@@ -171,8 +168,6 @@ export function SettingsPage({ notify, admin }) {
   const [revealed, setRevealed] = useState({});
   const [thirdPartyModal, setThirdPartyModal] = useState(null);
   const [thirdPartyForm, setThirdPartyForm] = useState(BLANK_THIRD_PARTY);
-  const [answering, setAnswering] = useState(null);
-  const [resolution, setResolution] = useState('');
   const [run, busy] = useAction(notify);
 
   /** My Account: the name field starts from the signed-in admin's own record. */
@@ -209,7 +204,6 @@ export function SettingsPage({ notify, admin }) {
   const settings = useApi(() => getSettings(), []);
   const integrations = useApi(() => listIntegrations(), [], { skip: tab !== 'thirdParty' });
   const thirdParties = useApi(() => listThirdParties(), [], { skip: tab !== 'thirdParty' });
-  const tickets = useApi(() => listTickets({ limit: 100 }), [], { skip: tab !== 'support' });
 
   const integrationByProvider = Object.fromEntries(
     (integrations.data?.integrations ?? []).map((row) => [row.provider, row]),
@@ -225,8 +219,6 @@ export function SettingsPage({ notify, admin }) {
     });
 
   const canManage = can('settings.manage');
-  /** PATCH /admin/support-tickets/:id itself requires this — not settings.manage. */
-  const canResolveTickets = can('consultations.manage');
 
   const setNumber = (key) => (event) =>
     setForm((current) => ({ ...current, [key]: event.target.value }));
@@ -339,16 +331,6 @@ export function SettingsPage({ notify, admin }) {
       onDone: thirdParties.reload,
     });
 
-  const answerTicket = () =>
-    run(() => resolveTicket(answering._id, { status: 'resolved', resolution: resolution.trim() }), {
-      success: 'Ticket resolved',
-      onDone: async () => {
-        setAnswering(null);
-        setResolution('');
-        await tickets.reload();
-      },
-    });
-
   const commission = Number(form?.commissionPercent ?? 0);
 
   const thirdPartyColumns = [
@@ -393,61 +375,6 @@ export function SettingsPage({ notify, admin }) {
                 icon: 'ban',
                 variant: 'danger',
                 onClick: () => removeThirdParty(row),
-              },
-            ]}
-          />
-        ) : null,
-    },
-  ];
-
-  const ticketColumns = [
-    {
-      key: 'reference',
-      label: 'Ticket',
-      render: (row) => (
-        <div style={{ maxWidth: 360 }}>
-          <p className="strong truncate">{row.description}</p>
-          <p className="faint" style={{ fontSize: 11.5 }}>
-            {row.reference} · {label(row.issueType)} · {label(row.ownerRole)}
-          </p>
-        </div>
-      ),
-    },
-    {
-      key: 'ownerName',
-      label: 'Raised by',
-      sortable: true,
-      render: (row) => <Identity name={row.ownerName || 'Unknown'} size="sm" />,
-    },
-    {
-      key: 'createdAt',
-      label: 'When',
-      sortable: true,
-      sortValue: (row) => new Date(row.createdAt).getTime(),
-      render: (row) => dateTime(row.createdAt),
-    },
-    {
-      key: 'status',
-      label: 'Status',
-      sortable: true,
-      render: (row) => <StatusBadge status={row.status} />,
-    },
-    {
-      key: 'actions',
-      label: '',
-      align: 'actions',
-      render: (row) =>
-        canResolveTickets && row.status !== 'resolved' && row.status !== 'closed' ? (
-          <RowActions
-            actions={[
-              {
-                label: 'Answer',
-                icon: 'check',
-                variant: 'success',
-                onClick: () => {
-                  setAnswering(row);
-                  setResolution('');
-                },
               },
             ]}
           />
@@ -788,19 +715,6 @@ export function SettingsPage({ notify, admin }) {
         </div>
       )}
 
-      {tab === 'support' && (
-        <DataTable
-          columns={ticketColumns}
-          rows={tickets.data?.items ?? []}
-          loading={tickets.loading}
-          error={tickets.error}
-          onRetry={tickets.reload}
-          searchKeys={['reference', 'description', 'ownerName']}
-          searchPlaceholder="Search tickets…"
-          empty={{ icon: 'inbox', title: 'No support tickets' }}
-        />
-      )}
-
       {configuring && (() => {
         const provider = THIRD_PARTY_PROVIDERS.find((item) => item.key === configuring);
         const configured = provider.fields.some(
@@ -934,39 +848,6 @@ export function SettingsPage({ notify, admin }) {
         </Modal>
       )}
 
-      {answering && (
-        <Modal
-          title={`Answer ${answering.reference}`}
-          subtitle={`${label(answering.issueType)} · raised by ${answering.ownerName || 'a user'}`}
-          onClose={() => setAnswering(null)}
-          footer={
-            <>
-              <Button onClick={() => setAnswering(null)}>Cancel</Button>
-              <Button
-                variant="primary"
-                icon="check"
-                disabled={busy || resolution.trim().length < 4}
-                onClick={answerTicket}
-              >
-                Mark resolved
-              </Button>
-            </>
-          }
-        >
-          <div className="stack" style={{ gap: 14 }}>
-            <Note tone="info" icon="info">
-              {answering.description}
-            </Note>
-            <Field label="Your answer" hint="Sent to them as a notification">
-              <Textarea
-                placeholder="e.g. Your payout was released today and should arrive within 48 hours."
-                value={resolution}
-                onChange={(event) => setResolution(event.target.value)}
-              />
-            </Field>
-          </div>
-        </Modal>
-      )}
     </div>
   );
 }

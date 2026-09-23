@@ -13,6 +13,7 @@ import { useHashRoute, useToasts } from './hooks/useHashRoute';
 import { signOut as endSession } from './services/admin';
 import { getAdmin, isSignedIn, onSessionChange } from './services/session';
 import AstrologersPage from './pages/AstrologersPage';
+import DisputesPage from './pages/DisputesPage';
 import ConsultationsPage from './pages/ConsultationsPage';
 import ContentPage from './pages/ContentPage';
 import DashboardPage from './pages/DashboardPage';
@@ -34,6 +35,7 @@ const PAGES = {
   payments: PaymentsPage,
   wallets: WalletsPage,
   content: ContentPage,
+  disputes: DisputesPage,
   audit: AuditLogsPage,
   reports: ReportsPage,
   settings: SettingsPage,
