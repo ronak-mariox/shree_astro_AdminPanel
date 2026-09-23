@@ -12,6 +12,13 @@ dist
 dist-ssr
 *.local
 
+# Local environment — VITE_API_URL and friends. Everything a Vite build reads
+# ends up inside the bundle it ships, so nothing secret belongs in one; the
+# example stays committed as the list of what a deploy has to set.
+.env
+.env.*
+!.env.example
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

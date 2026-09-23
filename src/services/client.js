@@ -15,9 +15,7 @@ import { clearSession, getAccessToken, getRefreshToken, setTokens } from './sess
  * the API run on the same machine.
  */
 export const API_BASE_URL =
-  import.meta.env.VITE_API_URL || 'http://localhost:5000/api/v1' ;
-
-  // "https://shree-astro-backend.vercel.app/api/v1";
+  import.meta.env.VITE_API_URL || 'http://localhost:5000/api/v1';
 
 /** What a page catches: a message worth showing, and the reason behind it. */
 export class ApiError extends Error {
