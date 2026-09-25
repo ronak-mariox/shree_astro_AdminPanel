@@ -9,6 +9,7 @@ import { useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { Icon } from './Icon';
 import { cx } from '../utils/cx';
+import { mediaUrl } from '../utils/media';
 
 /* ————————————————————————————————— Button */
 
@@ -127,6 +128,7 @@ const STATUS_TONES = {
   delivered: 'success',
   live: 'success',
   operational: 'success',
+  confirmed: 'success',
 
   pending: 'warning',
   degraded: 'warning',
@@ -137,6 +139,8 @@ const STATUS_TONES = {
   draft: 'warning',
   queued: 'warning',
   'awaiting payout': 'warning',
+  placed: 'warning',
+  packed: 'warning',
 
   suspended: 'danger',
   blocked: 'danger',
@@ -149,6 +153,9 @@ const STATUS_TONES = {
   ongoing: 'info',
   busy: 'info',
   chat: 'info',
+  shipped: 'info',
+  out_for_delivery: 'info',
+  'out for delivery': 'info',
 
   offline: 'neutral',
   inactive: 'neutral',
@@ -161,7 +168,10 @@ const STATUS_TONES = {
 
 export function StatusBadge({ status, dot = true }) {
   const tone = STATUS_TONES[String(status).toLowerCase()] || 'neutral';
-  const label = String(status).replace(/(^|\s)\S/g, (c) => c.toUpperCase());
+  /** `out_for_delivery` prints as "Out For Delivery". */
+  const label = String(status)
+    .replace(/_/g, ' ')
+    .replace(/(^|\s)\S/g, (c) => c.toUpperCase());
   return (
     <Badge tone={tone} dot={dot}>
       {label}
@@ -264,6 +274,76 @@ export function ToggleRow({ title, desc, on, onChange }) {
       </div>
       <Toggle on={on} onChange={onChange} label={title} />
     </div>
+  );
+}
+
+/**
+ * One image for a record — the current one from the API (`src`), or the file
+ * just picked (`file`, previewed through an object URL). The hidden file input
+ * sits inside a button-styled label, the same as the account photo picker.
+ */
+export function ImagePicker({ src, file, onPick, size = 72, label = 'Choose image' }) {
+  const preview = file ? URL.createObjectURL(file) : mediaUrl(src);
+  return (
+    <div className="row" style={{ gap: 14 }}>
+      {preview ? (
+        <img
+          src={preview}
+          alt=""
+          width={size}
+          height={size}
+          style={{
+            width: size,
+            height: size,
+            borderRadius: 10,
+            objectFit: 'cover',
+            border: '1px solid var(--border-card)',
+            flex: 'none',
+          }}
+        />
+      ) : (
+        <span className="doc-row__icon" style={{ width: size, height: size }}>
+          <Icon name="image" size={22} />
+        </span>
+      )}
+      <div className="stack" style={{ gap: 6 }}>
+        <label className="btn btn--ghost btn--sm" style={{ cursor: 'pointer', width: 'fit-content' }}>
+          {preview ? 'Change image' : label}
+          <input
+            type="file"
+            accept="image/*"
+            onChange={(event) => {
+              const picked = event.target.files?.[0];
+              if (picked) onPick(picked);
+            }}
+            style={{ display: 'none' }}
+          />
+        </label>
+        {file && (
+          <span className="faint" style={{ fontSize: 11.5 }}>
+            {file.name}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** A 40px square thumbnail, or a placeholder when the record has no image. */
+export function Thumb({ src, size = 40 }) {
+  const url = mediaUrl(src);
+  return url ? (
+    <img
+      src={url}
+      alt=""
+      width={size}
+      height={size}
+      style={{ width: size, height: size, borderRadius: 9, objectFit: 'cover', flex: 'none' }}
+    />
+  ) : (
+    <span className="avatar avatar--muted" style={{ width: size, height: size }}>
+      <Icon name="image" size={16} />
+    </span>
   );
 }
 

@@ -12,18 +12,23 @@ import { DataTable, RowActions } from '../components/DataTable';
 import { Icon } from '../components/Icon';
 import { PageHeader } from '../components/Shell';
 import {
+  Badge,
   Button,
   Chips,
   DetailList,
+  Field,
   Identity,
+  Input,
   LoadingBlock,
   Modal,
   Note,
+  Select,
   StatCard,
   StatusBadge,
+  Textarea,
 } from '../components/ui';
 import { useAction, useApi } from '../hooks/useApi';
-import { getDashboard, getUser, listUsers, setUserStatus } from '../services/admin';
+import { adjustLoyalty, getDashboard, getUser, listUsers, setUserStatus } from '../services/admin';
 import { can } from '../services/session';
 import {
   birthLine,
@@ -45,9 +50,14 @@ const FILTERS = [
 /** How many rows to pull; DataTable pages through them client-side. */
 const PAGE_LIMIT = 100;
 
+const TIER_TONE = { silver: 'neutral', gold: 'warning', platinum: 'info', diamond: 'lilac' };
+const BLANK_POINTS = { direction: 'add', points: '', reason: '' };
+
 export function UsersPage({ notify }) {
   const [filter, setFilter] = useState('active');
   const [openId, setOpenId] = useState(null);
+  const [adjusting, setAdjusting] = useState(false);
+  const [adjustment, setAdjustment] = useState(BLANK_POINTS);
   const [run, busy] = useAction(notify);
 
   const status = filter;
@@ -82,7 +92,28 @@ export function UsersPage({ notify }) {
     });
 
   const canManage = can('users.manage');
+  const canAdjustPoints = can('wallets.adjust');
   const open = detail?.user;
+
+  const pointsInvalid =
+    !Number.isInteger(Number(adjustment.points)) ||
+    Number(adjustment.points) < 1 ||
+    !adjustment.reason.trim();
+
+  const submitPoints = () => {
+    const signed = Number(adjustment.points) * (adjustment.direction === 'add' ? 1 : -1);
+    return run(
+      () => adjustLoyalty({ userId: open.id, points: signed, reason: adjustment.reason.trim() }),
+      {
+        success: `${signed > 0 ? 'Added' : 'Removed'} ${count(Math.abs(signed))} points · ${open.name}`,
+        onDone: async () => {
+          setAdjusting(false);
+          setAdjustment(BLANK_POINTS);
+          await reloadDetail();
+        },
+      },
+    );
+  };
 
   const columns = [
     {
@@ -304,6 +335,43 @@ export function UsersPage({ notify }) {
               </div>
 
               <section>
+                <div className="row row--between" style={{ marginBottom: 8 }}>
+                  <h3 className="section-title" style={{ margin: 0 }}>
+                    Loyalty
+                  </h3>
+                  {canAdjustPoints && (
+                    <Button
+                      size="sm"
+                      icon="plus"
+                      onClick={() => {
+                        setAdjustment(BLANK_POINTS);
+                        setAdjusting(true);
+                      }}
+                    >
+                      Adjust points
+                    </Button>
+                  )}
+                </div>
+                <DetailList
+                  rows={[
+                    { label: 'Points', value: <span className="mono">{count(open.loyalty?.points)}</span> },
+                    {
+                      label: 'Tier',
+                      value: open.loyalty?.tier ? (
+                        <Badge tone={TIER_TONE[open.loyalty.tier] || 'neutral'}>{label(open.loyalty.tier)}</Badge>
+                      ) : (
+                        '—'
+                      ),
+                    },
+                    { label: 'Lifetime points', value: count(open.loyalty?.lifetimePoints) },
+                    ...(open.referralCode
+                      ? [{ label: 'Referral code', value: <span className="mono">{open.referralCode}</span> }]
+                      : []),
+                  ]}
+                />
+              </section>
+
+              <section>
                 <h3 className="section-title">Account</h3>
                 <DetailList
                   rows={[
@@ -353,6 +421,59 @@ export function UsersPage({ notify }) {
               </section>
             </div>
           )}
+        </Modal>
+      )}
+
+      {adjusting && open && (
+        <Modal
+          title={`Adjust points · ${open.name}`}
+          subtitle={`Currently ${count(open.loyalty?.points)} points · ${label(open.loyalty?.tier || 'silver')}`}
+          onClose={() => setAdjusting(false)}
+          footer={
+            <>
+              <Button onClick={() => setAdjusting(false)}>Cancel</Button>
+              <Button variant="primary" icon="check" disabled={busy || pointsInvalid} onClick={submitPoints}>
+                {adjustment.direction === 'add' ? 'Add points' : 'Remove points'}
+              </Button>
+            </>
+          }
+        >
+          <div className="stack" style={{ gap: 14 }}>
+            <div className="grid grid--2" style={{ gap: 14 }}>
+              <Field label="Direction">
+                <Select
+                  value={adjustment.direction}
+                  onChange={(event) =>
+                    setAdjustment((current) => ({ ...current, direction: event.target.value }))
+                  }
+                  options={[
+                    { value: 'add', label: 'Add points' },
+                    { value: 'remove', label: 'Remove points' },
+                  ]}
+                />
+              </Field>
+              <Field label="Points">
+                <Input
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={adjustment.points}
+                  onChange={(event) =>
+                    setAdjustment((current) => ({ ...current, points: event.target.value }))
+                  }
+                />
+              </Field>
+            </div>
+            <Field label="Reason" hint="Recorded on the user's points history and in the audit log">
+              <Textarea
+                placeholder="e.g. Goodwill for a dropped call"
+                value={adjustment.reason}
+                onChange={(event) =>
+                  setAdjustment((current) => ({ ...current, reason: event.target.value }))
+                }
+              />
+            </Field>
+          </div>
         </Modal>
       )}
     </div>

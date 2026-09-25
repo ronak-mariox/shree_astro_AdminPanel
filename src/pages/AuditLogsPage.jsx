@@ -23,7 +23,13 @@ const AREAS = [
   'Payments',
   'Wallets',
   'Content',
+  'Shop',
+  'Pujas',
+  'Offers',
+  'Reviews',
+  'Careers',
   'Settings',
+  'Third parties',
 ];
 
 const AREA_TONE = {
@@ -33,7 +39,13 @@ const AREA_TONE = {
   Payments: 'success',
   Wallets: 'success',
   Content: 'neutral',
+  Shop: 'info',
+  Pujas: 'brand',
+  Offers: 'lilac',
+  Reviews: 'info',
+  Careers: 'neutral',
   Settings: 'warning',
+  'Third parties': 'warning',
 };
 
 const FILTERS = [

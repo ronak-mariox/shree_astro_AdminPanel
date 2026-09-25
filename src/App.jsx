@@ -19,10 +19,18 @@ import ContentPage from './pages/ContentPage';
 import DashboardPage from './pages/DashboardPage';
 import LoginPage from './pages/LoginPage';
 import AuditLogsPage from './pages/AuditLogsPage';
+import CareersPage from './pages/CareersPage';
 import NotificationsPage from './pages/NotificationsPage';
+import OffersPage from './pages/OffersPage';
+import OrdersPage from './pages/OrdersPage';
 import PaymentsPage from './pages/PaymentsPage';
+import ProductsPage from './pages/ProductsPage';
+import PujaBookingsPage from './pages/PujaBookingsPage';
+import PujasPage from './pages/PujasPage';
 import ReportsPage from './pages/ReportsPage';
+import ReviewsPage from './pages/ReviewsPage';
 import SettingsPage from './pages/SettingsPage';
+import TestimonialsPage from './pages/TestimonialsPage';
 import UsersPage from './pages/UsersPage';
 import WalletsPage from './pages/WalletsPage';
 
@@ -35,6 +43,14 @@ const PAGES = {
   payments: PaymentsPage,
   wallets: WalletsPage,
   content: ContentPage,
+  products: ProductsPage,
+  orders: OrdersPage,
+  pujas: PujasPage,
+  pujaBookings: PujaBookingsPage,
+  offers: OffersPage,
+  reviews: ReviewsPage,
+  testimonials: TestimonialsPage,
+  careers: CareersPage,
   disputes: DisputesPage,
   audit: AuditLogsPage,
   reports: ReportsPage,
@@ -45,7 +61,7 @@ export default function App() {
   /** Read from sessionStorage, so a page refresh does not sign the admin out. */
   const [admin, setAdmin] = useState(getAdmin);
   const [collapsed, setCollapsed] = useState(false);
-  const [route, navigate] = useHashRoute('dashboard');
+  const [route, navigate, query] = useHashRoute('dashboard');
   const [toasts, notify] = useToasts();
   /** Bumped by the topbar's "Refresh data" button — folded into the current page's `key` below so React remounts it from scratch, same as switching routes does. */
   const [refreshTick, setRefreshTick] = useState(0);
@@ -87,7 +103,13 @@ export default function App() {
           onRefresh={() => setRefreshTick((tick) => tick + 1)}
           admin={admin}
         />
-        <Page key={`${route}-${refreshTick}`} onNavigate={navigate} notify={notify} admin={admin} />
+        <Page
+          key={`${route}-${refreshTick}-${JSON.stringify(query)}`}
+          onNavigate={navigate}
+          notify={notify}
+          admin={admin}
+          query={query}
+        />
       </div>
 
       <Toasts items={toasts} />
