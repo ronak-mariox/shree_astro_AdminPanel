@@ -41,7 +41,7 @@ import {
   updateThirdParty,
 } from '../services/admin';
 import { can, updateCachedAdmin } from '../services/session';
-import { dateTime, money } from '../utils/format';
+import { dateTime, label, money } from '../utils/format';
 
 const TABS = [
   { key: 'account', label: 'My Account' },
@@ -144,6 +144,29 @@ const THIRD_PARTY_CATEGORIES = [
   { value: 'email', label: 'Email Provider' },
   { value: 'analytics', label: 'Analytics' },
   { value: 'other', label: 'Other' },
+];
+
+/** What the loyalty / referral fields fall back to until the API has saved them once. */
+const DEFAULT_LOYALTY = {
+  enabled: true,
+  pointsPer100: { chat: 10, call: 12, order: 8, puja: 8 },
+  referralBonusPoints: 100,
+  signupBonusPoints: 50,
+  tiers: [
+    { key: 'silver', minPoints: 0, cashbackPercent: 0 },
+    { key: 'gold', minPoints: 500, cashbackPercent: 2 },
+    { key: 'platinum', minPoints: 2000, cashbackPercent: 3 },
+    { key: 'diamond', minPoints: 5000, cashbackPercent: 5 },
+  ],
+  cashbackEnabled: false,
+};
+const DEFAULT_REFERRAL = { enabled: true, rewardAmount: 200, minFirstSpend: 100 };
+
+const EARN_KINDS = [
+  { key: 'chat', label: 'Chat' },
+  { key: 'call', label: 'Call' },
+  { key: 'order', label: 'Store order' },
+  { key: 'puja', label: 'Puja' },
 ];
 
 const PAYOUT_CYCLES = [
@@ -249,6 +272,48 @@ export function SettingsPage({ notify, admin }) {
       ),
     }));
 
+  /**
+   * Loyalty points and the referral reward — nested objects, edited in place
+   * and sent whole. Missing from an older API's response, so defaulted here.
+   */
+  const loyalty = { ...DEFAULT_LOYALTY, ...(form?.loyalty || {}) };
+  loyalty.pointsPer100 = { ...DEFAULT_LOYALTY.pointsPer100, ...(form?.loyalty?.pointsPer100 || {}) };
+  loyalty.tiers = DEFAULT_LOYALTY.tiers.map(
+    (tier) => (form?.loyalty?.tiers || []).find((row) => row.key === tier.key) || tier,
+  );
+  const referral = { ...DEFAULT_REFERRAL, ...(form?.referral || {}) };
+
+  const setLoyalty = (patch) =>
+    setForm((current) => ({ ...current, loyalty: { ...loyalty, ...patch } }));
+  const setLoyaltyNumber = (key) => (event) => setLoyalty({ [key]: event.target.value });
+  const setEarn = (kind) => (event) =>
+    setLoyalty({ pointsPer100: { ...loyalty.pointsPer100, [kind]: event.target.value } });
+  const setTier = (key, field) => (event) =>
+    setLoyalty({
+      tiers: loyalty.tiers.map((tier) =>
+        tier.key === key ? { ...tier, [field]: event.target.value } : tier,
+      ),
+    });
+  const setReferral = (patch) =>
+    setForm((current) => ({ ...current, referral: { ...referral, ...patch } }));
+
+  const wholeNumber = (value, min = 0, max = Infinity) => {
+    const number = Number(value);
+    if (value === '' || !Number.isInteger(number) || number < min || number > max) {
+      return max === Infinity ? `A whole number, ${min} or more` : `A whole number from ${min} to ${max}`;
+    }
+    return undefined;
+  };
+  const growthInvalid =
+    EARN_KINDS.some((kind) => wholeNumber(loyalty.pointsPer100[kind.key])) ||
+    Boolean(wholeNumber(loyalty.referralBonusPoints)) ||
+    Boolean(wholeNumber(loyalty.signupBonusPoints)) ||
+    loyalty.tiers.some(
+      (tier) => wholeNumber(tier.minPoints) || wholeNumber(tier.cashbackPercent, 0, 100),
+    ) ||
+    Boolean(wholeNumber(referral.rewardAmount)) ||
+    Boolean(wholeNumber(referral.minFirstSpend));
+
   const save = () =>
     run(
       () =>
@@ -263,6 +328,25 @@ export function SettingsPage({ notify, admin }) {
             minutes: row.minutes,
             discountPercent: Number(row.discountPercent),
           })),
+          loyalty: {
+            enabled: Boolean(loyalty.enabled),
+            pointsPer100: Object.fromEntries(
+              EARN_KINDS.map((kind) => [kind.key, Number(loyalty.pointsPer100[kind.key])]),
+            ),
+            referralBonusPoints: Number(loyalty.referralBonusPoints),
+            signupBonusPoints: Number(loyalty.signupBonusPoints),
+            tiers: loyalty.tiers.map((tier) => ({
+              key: tier.key,
+              minPoints: Number(tier.minPoints),
+              cashbackPercent: Number(tier.cashbackPercent),
+            })),
+            cashbackEnabled: Boolean(loyalty.cashbackEnabled),
+          },
+          referral: {
+            enabled: Boolean(referral.enabled),
+            rewardAmount: Number(referral.rewardAmount),
+            minFirstSpend: Number(referral.minFirstSpend),
+          },
         }),
       {
         success: 'Settings saved',
@@ -395,7 +479,7 @@ export function SettingsPage({ notify, admin }) {
           <>
             <Tabs value={tab} onChange={setTab} items={TABS} />
             {tab === 'platform' && canManage && (
-              <Button variant="primary" icon="check" disabled={busy || !form || discountsInvalid} onClick={save}>
+              <Button variant="primary" icon="check" disabled={busy || !form || discountsInvalid || growthInvalid} onClick={save}>
                 Save changes
               </Button>
             )}
@@ -589,6 +673,153 @@ export function SettingsPage({ notify, admin }) {
                   on={form.features.maintenanceMode}
                   onChange={setSwitch('maintenanceMode')}
                 />
+              </Card>
+
+              <Card
+                title="Loyalty & referral"
+                subtitle="Points earned per ₹100 spent, the tiers they unlock, and the refer-a-friend reward"
+              >
+                <ToggleRow
+                  title="Loyalty points"
+                  desc="Seekers earn points on every paid consultation, order and puja"
+                  on={Boolean(loyalty.enabled)}
+                  onChange={(value) => setLoyalty({ enabled: value })}
+                />
+
+                <div className="grid grid--2" style={{ gap: 14, marginTop: 16 }}>
+                  {EARN_KINDS.map((kind) => (
+                    <Field
+                      key={kind.key}
+                      label={`${kind.label} — points per ₹100`}
+                      error={wholeNumber(loyalty.pointsPer100[kind.key])}
+                    >
+                      <Input
+                        type="number"
+                        min="0"
+                        step="1"
+                        value={loyalty.pointsPer100[kind.key]}
+                        disabled={!canManage}
+                        onChange={setEarn(kind.key)}
+                      />
+                    </Field>
+                  ))}
+                  <Field label="Sign-up bonus (points)" error={wholeNumber(loyalty.signupBonusPoints)}>
+                    <Input
+                      type="number"
+                      min="0"
+                      step="1"
+                      value={loyalty.signupBonusPoints}
+                      disabled={!canManage}
+                      onChange={setLoyaltyNumber('signupBonusPoints')}
+                    />
+                  </Field>
+                  <Field
+                    label="Referral bonus (points)"
+                    hint="To the referrer, on top of the wallet reward below"
+                    error={wholeNumber(loyalty.referralBonusPoints)}
+                  >
+                    <Input
+                      type="number"
+                      min="0"
+                      step="1"
+                      value={loyalty.referralBonusPoints}
+                      disabled={!canManage}
+                      onChange={setLoyaltyNumber('referralBonusPoints')}
+                    />
+                  </Field>
+                </div>
+
+                <h3 className="section-title" style={{ marginTop: 18 }}>
+                  Tiers
+                </h3>
+                <div className="table-wrap">
+                  <table className="table table--dense">
+                    <thead>
+                      <tr>
+                        <th>Tier</th>
+                        <th className="num">From (lifetime points)</th>
+                        <th className="num">Cashback (%)</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {loyalty.tiers.map((tier) => (
+                        <tr key={tier.key}>
+                          <td className="strong">{label(tier.key)}</td>
+                          <td className="num">
+                            <Input
+                              type="number"
+                              min="0"
+                              step="1"
+                              value={tier.minPoints}
+                              disabled={!canManage || tier.key === 'silver'}
+                              invalid={Boolean(wholeNumber(tier.minPoints))}
+                              onChange={setTier(tier.key, 'minPoints')}
+                              style={{ width: 120, marginLeft: 'auto' }}
+                            />
+                          </td>
+                          <td className="num">
+                            <Input
+                              type="number"
+                              min="0"
+                              max="100"
+                              step="1"
+                              value={tier.cashbackPercent}
+                              disabled={!canManage}
+                              invalid={Boolean(wholeNumber(tier.cashbackPercent, 0, 100))}
+                              onChange={setTier(tier.key, 'cashbackPercent')}
+                              style={{ width: 100, marginLeft: 'auto' }}
+                            />
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div style={{ marginTop: 12 }}>
+                  <ToggleRow
+                    title="Tier cashback"
+                    desc="Credit the tier's percentage of each consultation charge back to the wallet"
+                    on={Boolean(loyalty.cashbackEnabled)}
+                    onChange={(value) => setLoyalty({ cashbackEnabled: value })}
+                  />
+                </div>
+
+                <h3 className="section-title" style={{ marginTop: 18 }}>
+                  Referral
+                </h3>
+                <ToggleRow
+                  title="Refer a friend"
+                  desc="Both sides get the reward once the invited seeker first spends the minimum"
+                  on={Boolean(referral.enabled)}
+                  onChange={(value) => setReferral({ enabled: value })}
+                />
+                <div className="grid grid--2" style={{ gap: 14, marginTop: 16 }}>
+                  <Field label="Reward (₹ to each wallet)" error={wholeNumber(referral.rewardAmount)}>
+                    <Input
+                      type="number"
+                      min="0"
+                      step="1"
+                      value={referral.rewardAmount}
+                      disabled={!canManage}
+                      onChange={(event) => setReferral({ rewardAmount: event.target.value })}
+                    />
+                  </Field>
+                  <Field
+                    label="Minimum first spend (₹)"
+                    hint="The invited seeker's first consultation, order or puja must be at least this"
+                    error={wholeNumber(referral.minFirstSpend)}
+                  >
+                    <Input
+                      type="number"
+                      min="0"
+                      step="1"
+                      value={referral.minFirstSpend}
+                      disabled={!canManage}
+                      onChange={(event) => setReferral({ minFirstSpend: event.target.value })}
+                    />
+                  </Field>
+                </div>
               </Card>
             </div>
 

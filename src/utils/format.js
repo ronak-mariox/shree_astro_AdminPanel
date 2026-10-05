@@ -104,12 +104,16 @@ export const listOr = (value, fallback = '—') => {
 export const orDash = (value) =>
   value === 0 || (value && String(value).trim()) ? value : '—';
 
-/** "+91" + "9876543210" → "+91 98765 43210". */
+/** "+91" + "9876543210" → "+91 98765 43210"; "+919876543210" (already joined) prints the same. */
 export function phone(number, countryCode = '+91') {
   if (!number) return '—';
   const digits = String(number).replace(/\D/g, '');
   if (digits.length === 10) {
     return `${countryCode} ${digits.slice(0, 5)} ${digits.slice(5)}`;
+  }
+  if (digits.length > 10 && digits.length <= 13) {
+    const local = digits.slice(-10);
+    return `+${digits.slice(0, -10)} ${local.slice(0, 5)} ${local.slice(5)}`;
   }
   return `${countryCode} ${digits}`;
 }

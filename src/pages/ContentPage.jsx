@@ -14,6 +14,7 @@ import {
   Button,
   Chips,
   Field,
+  ImagePicker,
   Input,
   Modal,
   Note,
@@ -21,6 +22,7 @@ import {
   StatCard,
   StatusBadge,
   Textarea,
+  Thumb,
 } from '../components/ui';
 import { useAction, useApi } from '../hooks/useApi';
 import {
@@ -38,13 +40,23 @@ const STATUSES = [
   { key: 'draft', label: 'Drafts' },
 ];
 
-/** The categories the app's content list groups by. */
+/** Suggested categories — the field itself is free text, so a new one can be typed. */
 const CATEGORIES = [
   'Astrology Basics',
   'Kundli & Charts',
   'Doshas & Remedies',
   'Festivals & Muhurat',
   'Gemstones',
+  'Daily Horoscope',
+  'Astrology Tips',
+  'Vastu Tips',
+  'Numerology',
+  'Dream Interpretation',
+  'Gemstone Guide',
+  'Festival Articles',
+  'Spiritual Lifestyle',
+  'Relationship Advice',
+  'Career Guidance',
 ];
 
 const BLANK = {
@@ -54,13 +66,25 @@ const BLANK = {
   visibility: 'everyone',
   excerpt: '',
   body: '',
+  tagsText: '',
+  coverImageUrl: '',
 };
+
+/** Articles come back as raw documents, so the id is `_id`; `id` is accepted too. */
+const idOf = (row) => row?._id ?? row?.id;
+
+const toForm = (row) => ({
+  ...row,
+  tagsText: (row.tags || []).join(', '),
+});
 
 const PAGE_LIMIT = 100;
 
 export function ContentPage({ notify }) {
   const [status, setStatus] = useState('all');
   const [editing, setEditing] = useState(null);
+  const [cover, setCover] = useState(null);
+  const [deleting, setDeleting] = useState(null);
   const [run, busy] = useAction(notify);
 
   const { data, loading, error, reload } = useApi(
@@ -71,34 +95,50 @@ export function ContentPage({ notify }) {
   const rows = data?.items ?? [];
   const canManage = can('content.manage');
 
+  const openEditor = (form) => {
+    setCover(null);
+    setEditing(form);
+  };
+
   const save = (publish) => {
     const body = {
       title: editing.title.trim(),
-      category: editing.category,
+      category: editing.category.trim(),
       author: editing.author.trim(),
       visibility: editing.visibility,
       excerpt: editing.excerpt.trim(),
       body: editing.body,
+      tags: (editing.tagsText || '')
+        .split(',')
+        .map((tag) => tag.trim())
+        .filter(Boolean),
       ...(publish ? { status: 'published' } : {}),
     };
 
-    return run(() => (editing._id ? updateArticle(editing._id, body) : createArticle(body)), {
-      success: publish ? 'Article published' : 'Draft saved',
+    return run(
+      () => (idOf(editing) ? updateArticle(idOf(editing), body, cover) : createArticle(body, cover)),
+      {
+        success: publish ? 'Article published' : 'Draft saved',
+        onDone: async () => {
+          setEditing(null);
+          setCover(null);
+          await reload();
+        },
+      },
+    );
+  };
+
+  const remove = () =>
+    run(() => deleteArticle(idOf(deleting)), {
+      success: 'Article deleted',
       onDone: async () => {
-        setEditing(null);
+        setDeleting(null);
         await reload();
       },
     });
-  };
-
-  const remove = (article) =>
-    run(() => deleteArticle(article._id), {
-      success: 'Article deleted',
-      onDone: reload,
-    });
 
   const setStatusOf = (article, next) =>
-    run(() => updateArticle(article._id, { status: next }), {
+    run(() => updateArticle(idOf(article), { status: next }), {
       success: next === 'published' ? 'Article published' : 'Article archived',
       onDone: reload,
     });
@@ -109,11 +149,14 @@ export function ContentPage({ notify }) {
       label: 'Article',
       sortable: true,
       render: (row) => (
-        <div style={{ maxWidth: 380 }}>
-          <p className="strong truncate">{row.title}</p>
-          <p className="faint truncate" style={{ fontSize: 11.5 }}>
-            {row.excerpt}
-          </p>
+        <div className="identity" style={{ maxWidth: 420 }}>
+          <Thumb src={row.coverImageUrl} />
+          <div className="truncate">
+            <p className="strong truncate">{row.title}</p>
+            <p className="faint truncate" style={{ fontSize: 11.5 }}>
+              {row.excerpt}
+            </p>
+          </div>
         </div>
       ),
     },
@@ -138,6 +181,15 @@ export function ContentPage({ notify }) {
           <Icon name={row.visibility === 'users' ? 'eyeOff' : 'eye'} size={14} />
           {row.visibility === 'users' ? 'Signed-in users' : 'Everyone'}
         </span>
+      ),
+    },
+    {
+      key: 'readMinutes',
+      label: 'Read',
+      align: 'right',
+      sortable: true,
+      render: (row) => (
+        <span className="mono nowrap">{row.readMinutes ? `${row.readMinutes} min` : '—'}</span>
       ),
     },
     {
@@ -168,7 +220,7 @@ export function ContentPage({ notify }) {
         canManage ? (
           <RowActions
             actions={[
-              { label: 'Edit', icon: 'edit', onClick: () => setEditing(row) },
+              { label: 'Edit', icon: 'edit', onClick: () => openEditor(toForm(row)) },
               row.status === 'published'
                 ? {
                     label: 'Archive',
@@ -181,7 +233,7 @@ export function ContentPage({ notify }) {
                     variant: 'success',
                     onClick: () => setStatusOf(row, 'published'),
                   },
-              { label: 'Delete', icon: 'trash', variant: 'danger', onClick: () => remove(row) },
+              { label: 'Delete', icon: 'trash', variant: 'danger', onClick: () => setDeleting(row) },
             ]}
           />
         ) : null,
@@ -197,7 +249,7 @@ export function ContentPage({ notify }) {
           <>
             <Button icon="refresh" onClick={reload}>Refresh</Button>
             {canManage && (
-              <Button variant="primary" icon="plus" onClick={() => setEditing({ ...BLANK })}>
+              <Button variant="primary" icon="plus" onClick={() => openEditor({ ...BLANK })}>
                 New article
               </Button>
             )}
@@ -243,7 +295,7 @@ export function ContentPage({ notify }) {
         onRetry={reload}
         searchKeys={['title', 'category', 'author', 'excerpt']}
         searchPlaceholder="Search by title, author or category…"
-        onRowClick={canManage ? setEditing : undefined}
+        onRowClick={canManage ? (row) => openEditor(toForm(row)) : undefined}
         toolbar={<Chips value={status} onChange={setStatus} items={STATUSES} />}
         empty={{ icon: 'file', title: 'No articles in this view' }}
       />
@@ -251,10 +303,17 @@ export function ContentPage({ notify }) {
       {editing && (
         <Modal
           wide
-          title={editing._id ? 'Edit article' : 'New article'}
+          title={idOf(editing) ? 'Edit article' : 'New article'}
           subtitle={
-            editing._id
-              ? `${label(editing.status)} · updated ${date(editing.updatedAt)}`
+            idOf(editing)
+              ? [
+                  label(editing.status),
+                  `updated ${date(editing.updatedAt)}`,
+                  editing.readMinutes ? `${editing.readMinutes} min read` : null,
+                  editing.views ? `${count(editing.views)} views` : null,
+                ]
+                  .filter(Boolean)
+                  .join(' · ')
               : 'Saved as a draft until you publish it'
           }
           onClose={() => setEditing(null)}
@@ -287,14 +346,20 @@ export function ContentPage({ notify }) {
             </Field>
 
             <div className="grid grid--2" style={{ gap: 14 }}>
-              <Field label="Category">
-                <Select
-                  value={editing.category}
+              <Field label="Category" hint="Pick a suggestion or type a new one">
+                <Input
+                  list="article-categories"
+                  placeholder="e.g. Vastu Tips"
+                  value={editing.category || ''}
                   onChange={(event) =>
                     setEditing((current) => ({ ...current, category: event.target.value }))
                   }
-                  options={CATEGORIES.map((name) => ({ value: name, label: name }))}
                 />
+                <datalist id="article-categories">
+                  {CATEGORIES.map((name) => (
+                    <option key={name} value={name} />
+                  ))}
+                </datalist>
               </Field>
               <Field label="Author">
                 <Input
@@ -307,17 +372,32 @@ export function ContentPage({ notify }) {
               </Field>
             </div>
 
-            <Field label="Visibility">
-              <Select
-                value={editing.visibility}
-                onChange={(event) =>
-                  setEditing((current) => ({ ...current, visibility: event.target.value }))
-                }
-                options={[
-                  { value: 'everyone', label: 'Everyone — including signed-out visitors' },
-                  { value: 'users', label: 'Signed-in users only' },
-                ]}
-              />
+            <div className="grid grid--2" style={{ gap: 14 }}>
+              <Field label="Visibility">
+                <Select
+                  value={editing.visibility}
+                  onChange={(event) =>
+                    setEditing((current) => ({ ...current, visibility: event.target.value }))
+                  }
+                  options={[
+                    { value: 'everyone', label: 'Everyone — including signed-out visitors' },
+                    { value: 'users', label: 'Signed-in users only' },
+                  ]}
+                />
+              </Field>
+              <Field label="Tags" hint="Comma-separated">
+                <Input
+                  placeholder="e.g. rahu, remedies, gemstones"
+                  value={editing.tagsText || ''}
+                  onChange={(event) =>
+                    setEditing((current) => ({ ...current, tagsText: event.target.value }))
+                  }
+                />
+              </Field>
+            </div>
+
+            <Field label="Cover image" hint="Shown on the card and at the top of the article">
+              <ImagePicker src={editing.coverImageUrl} file={cover} onPick={setCover} />
             </Field>
 
             <Field label="Summary" hint="Shown on the card in the app's content list">
@@ -341,12 +421,33 @@ export function ContentPage({ notify }) {
               />
             </Field>
 
-            {editing._id && editing.status === 'published' && (
+            {idOf(editing) && editing.status === 'published' && (
               <Note tone="info" icon="info">
                 This article is live in the apps. Saving keeps it published.
               </Note>
             )}
           </div>
+        </Modal>
+      )}
+
+      {deleting && (
+        <Modal
+          title="Delete this article?"
+          subtitle={deleting.title}
+          onClose={() => setDeleting(null)}
+          footer={
+            <>
+              <Button onClick={() => setDeleting(null)}>Cancel</Button>
+              <Button variant="danger" icon="trash" disabled={busy} onClick={remove}>
+                Delete article
+              </Button>
+            </>
+          }
+        >
+          <Note tone="danger" icon="alert">
+            This removes the article for good, including from the apps if it is published.
+            Archive it instead if you may want it back.
+          </Note>
         </Modal>
       )}
     </div>

@@ -21,10 +21,17 @@ import {
   Note,
   Select,
   StatCard,
+  StatusBadge,
   Textarea,
 } from '../components/ui';
 import { useAction, useApi } from '../hooks/useApi';
-import { adjustWallet, getSettings, listWallets } from '../services/admin';
+import {
+  adjustWallet,
+  getSettings,
+  listWallets,
+  listWithdrawals,
+  reviewWithdrawal,
+} from '../services/admin';
 import { can } from '../services/session';
 import { label, money, relative } from '../utils/format';
 
@@ -36,6 +43,15 @@ export function WalletsPage({ notify }) {
   const [adjusting, setAdjusting] = useState(null);
   const [adjustment, setAdjustment] = useState(BLANK_ADJUSTMENT);
   const [run, busy] = useAction(notify);
+
+  /* Payout requests: nothing leaves an astrologer's balance until one of these is approved here. */
+  const [payoutStatus, setPayoutStatus] = useState('pending');
+  const [reviewing, setReviewing] = useState(null);
+  const [review, setReview] = useState({ decision: 'approved', payoutReference: '', reason: '' });
+  const payouts = useApi(
+    () => listWithdrawals({ status: payoutStatus === 'all' ? undefined : payoutStatus, limit: PAGE_LIMIT }),
+    [payoutStatus],
+  );
 
   const wallets = useApi(
     () => listWallets({ ownerRole: type === 'all' ? undefined : type, limit: PAGE_LIMIT }),
@@ -52,6 +68,100 @@ export function WalletsPage({ notify }) {
     .reduce((sum, row) => sum + row.balance, 0);
 
   const canAdjust = can('wallets.adjust');
+  const canApprove = can('payouts.approve');
+
+  const openReview = (row, decision) => {
+    setReviewing(row);
+    setReview({ decision, payoutReference: '', reason: '' });
+  };
+
+  const applyReview = () =>
+    run(
+      () =>
+        reviewWithdrawal(reviewing.id ?? reviewing._id, {
+          status: review.decision,
+          ...(review.decision === 'approved'
+            ? { payoutReference: review.payoutReference.trim() || undefined }
+            : { reason: review.reason.trim() }),
+        }),
+      {
+        success:
+          review.decision === 'approved'
+            ? `Approved and paid ${money(reviewing.amount)} · ${reviewing.astrologer?.name ?? 'astrologer'}`
+            : `Rejected ${money(reviewing.amount)} · ${reviewing.astrologer?.name ?? 'astrologer'}`,
+        onDone: async () => {
+          setReviewing(null);
+          await Promise.all([payouts.reload(), wallets.reload()]);
+        },
+      },
+    );
+
+  const payoutRows = (payouts.data?.items ?? []).map((row) => ({
+    ...row,
+    id: row.id ?? row._id,
+    astrologerName: row.astrologer?.name ?? '—',
+    bank: row.bankAccount?.upiId
+      ? row.bankAccount.upiId
+      : [row.bankAccount?.bankName, row.bankAccount?.accountNumber ? `····${String(row.bankAccount.accountNumber).slice(-4)}` : null]
+          .filter(Boolean)
+          .join(' · '),
+  }));
+
+  const payoutColumns = [
+    {
+      key: 'astrologerName',
+      label: 'Astrologer',
+      sortable: true,
+      render: (row) => <Identity name={row.astrologerName} meta={row.astrologer?.astroCode || row.reference} tone="muted" />,
+    },
+    {
+      key: 'amount',
+      label: 'Amount',
+      align: 'right',
+      sortable: true,
+      render: (row) => <span className="mono strong">{money(row.amount)}</span>,
+    },
+    {
+      key: 'bank',
+      label: 'Pay to',
+      render: (row) => (
+        <span className="faint" style={{ fontSize: 12.5 }}>
+          {row.bankAccount?.holderName ? `${row.bankAccount.holderName} · ` : ''}
+          {row.bank || '—'}
+        </span>
+      ),
+    },
+    {
+      key: 'requestedAt',
+      label: 'Requested',
+      sortable: true,
+      render: (row) => (row.requestedAt ? relative(row.requestedAt) : '—'),
+    },
+    {
+      key: 'status',
+      label: 'Status',
+      sortable: true,
+      render: (row) => <StatusBadge status={row.status} />,
+    },
+    {
+      key: 'actions',
+      label: '',
+      align: 'actions',
+      render: (row) =>
+        canApprove && row.status === 'pending' ? (
+          <RowActions
+            actions={[
+              { label: 'Approve & pay', icon: 'check', variant: 'primary', showLabel: true, onClick: () => openReview(row, 'approved') },
+              { label: 'Reject', icon: 'x', showLabel: true, onClick: () => openReview(row, 'rejected') },
+            ]}
+          />
+        ) : row.payoutReference || row.rejectionReason ? (
+          <span className="faint" style={{ fontSize: 12 }}>
+            {row.payoutReference || row.rejectionReason}
+          </span>
+        ) : null,
+    },
+  ];
 
   const applyAdjustment = () =>
     run(
@@ -202,6 +312,102 @@ export function WalletsPage({ notify }) {
         searchPlaceholder="Search wallets by holder…"
         empty={{ icon: 'wallet', title: 'No wallets in this view' }}
       />
+
+      <div className="row row--between" style={{ margin: '28px 0 14px' }}>
+        <div>
+          <p className="strong" style={{ fontSize: 15 }}>
+            Payout requests
+          </p>
+          <p className="faint" style={{ fontSize: 12.5 }}>
+            An astrologer's balance is deducted only when a request is approved here; until then the amount is
+            just reserved. Astrologers are told to allow up to 24 hours.
+          </p>
+        </div>
+        <Chips
+          value={payoutStatus}
+          onChange={setPayoutStatus}
+          items={[
+            { key: 'pending', label: 'Pending' },
+            { key: 'paid', label: 'Paid' },
+            { key: 'rejected', label: 'Rejected' },
+            { key: 'all', label: 'All' },
+          ]}
+        />
+      </div>
+
+      <DataTable
+        columns={payoutColumns}
+        rows={payoutRows}
+        loading={payouts.loading}
+        error={payouts.error}
+        onRetry={payouts.reload}
+        searchKeys={['astrologerName', 'reference', 'bank']}
+        searchPlaceholder="Search payouts by astrologer or reference…"
+        empty={{ icon: 'rupee', title: payoutStatus === 'pending' ? 'No payout requests waiting' : 'No payouts in this view' }}
+      />
+
+      {reviewing && (
+        <Modal
+          title={review.decision === 'approved' ? 'Approve & pay out' : 'Reject payout request'}
+          subtitle={`${reviewing.astrologerName} · ${money(reviewing.amount)} · ${reviewing.reference}`}
+          onClose={() => setReviewing(null)}
+          footer={
+            <>
+              <Button onClick={() => setReviewing(null)}>Cancel</Button>
+              <Button
+                variant={review.decision === 'approved' ? 'primary' : 'danger'}
+                icon={review.decision === 'approved' ? 'check' : 'x'}
+                disabled={busy || (review.decision === 'rejected' && review.reason.trim().length < 4)}
+                onClick={applyReview}
+              >
+                {review.decision === 'approved' ? `Approve · deduct ${money(reviewing.amount)}` : 'Reject request'}
+              </Button>
+            </>
+          }
+        >
+          <div className="stack" style={{ gap: 16 }}>
+            {review.decision === 'approved' ? (
+              <>
+                <Note tone="info" icon="info">
+                  {reviewing.deduction === 'on_approval'
+                    ? `Approving deducts ${money(reviewing.amount)} from the astrologer's earnings balance now and marks the request paid.`
+                    : `This request was made before payouts switched to deduct-on-approval: ${money(reviewing.amount)} already left the astrologer's balance when it was requested, so approving only records the payout.`}{' '}
+                  Transfer the money to the account below first, then record the reference.
+                </Note>
+                <div className="adjust-preview">
+                  <span>Pay to</span>
+                  <strong>
+                    {reviewing.bankAccount?.holderName || '—'} · {reviewing.bank || '—'}
+                    {reviewing.bankAccount?.ifsc ? ` · ${reviewing.bankAccount.ifsc}` : ''}
+                  </strong>
+                </div>
+                <Field label="Payout reference" hint="UTR / transaction id of the bank transfer (optional)">
+                  <Input
+                    placeholder="e.g. NEFT-8821…"
+                    value={review.payoutReference}
+                    onChange={(event) => setReview((current) => ({ ...current, payoutReference: event.target.value }))}
+                  />
+                </Field>
+              </>
+            ) : (
+              <>
+                <Note tone="warning" icon="info">
+                  {reviewing.deduction === 'on_approval'
+                    ? 'Nothing was deducted for this request, so rejecting just releases the reserved amount back to what the astrologer can withdraw.'
+                    : `This request was made before payouts switched to deduct-on-approval, so rejecting refunds ${money(reviewing.amount)} to the astrologer's balance.`}
+                </Note>
+                <Field label="Reason" hint="Sent to the astrologer with the rejection">
+                  <Textarea
+                    placeholder="e.g. Bank account name does not match the profile."
+                    value={review.reason}
+                    onChange={(event) => setReview((current) => ({ ...current, reason: event.target.value }))}
+                  />
+                </Field>
+              </>
+            )}
+          </div>
+        </Modal>
+      )}
 
       {adjusting && (
         <Modal

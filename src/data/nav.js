@@ -34,6 +34,24 @@ export const navGroups = [
     ],
   },
   {
+    label: 'Commerce',
+    items: [
+      { key: 'products', label: 'Products', icon: 'bag' },
+      { key: 'orders', label: 'Orders', icon: 'package' },
+      { key: 'pujas', label: 'Pujas', icon: 'flame' },
+      { key: 'pujaBookings', label: 'Puja Bookings', icon: 'calendar' },
+    ],
+  },
+  {
+    label: 'Growth',
+    items: [
+      { key: 'offers', label: 'Offers & Coupons', icon: 'tag' },
+      { key: 'reviews', label: 'Reviews', icon: 'star' },
+      { key: 'testimonials', label: 'Testimonials', icon: 'messageSquare' },
+      { key: 'careers', label: 'Careers', icon: 'briefcase' },
+    ],
+  },
+  {
     label: 'Operations',
     items: [
       { key: 'disputes', label: 'Disputes', icon: 'inbox' },
@@ -54,6 +72,14 @@ export const routeTitles = {
   payments: { title: 'Payment Management', group: 'Money' },
   wallets: { title: 'Wallet Management', group: 'Money' },
   content: { title: 'Content Management', group: 'Content' },
+  products: { title: 'Products', group: 'Commerce' },
+  orders: { title: 'Orders', group: 'Commerce' },
+  pujas: { title: 'Pujas', group: 'Commerce' },
+  pujaBookings: { title: 'Puja Bookings', group: 'Commerce' },
+  offers: { title: 'Offers & Coupons', group: 'Growth' },
+  reviews: { title: 'Reviews', group: 'Growth' },
+  testimonials: { title: 'Testimonials', group: 'Growth' },
+  careers: { title: 'Careers', group: 'Growth' },
   disputes: { title: 'Disputes & Support', group: 'Operations' },
   reports: { title: 'Reporting & Monitoring', group: 'Operations' },
   audit: { title: 'Audit Logs', group: 'Operations' },

@@ -6,11 +6,16 @@ import { useCallback, useEffect, useState } from 'react';
  * browser's back button both work: `#/consultations` selects that page.
  */
 export function useHashRoute(fallback = 'dashboard') {
-  const read = () => window.location.hash.replace(/^#\/?/, '') || fallback;
-  const [route, setRoute] = useState(read);
+  /** `#/reviews?kind=product&search=Mala` → `{ route: 'reviews', query: { kind, search } }`. */
+  const read = () => {
+    const raw = window.location.hash.replace(/^#\/?/, '');
+    const [path, search = ''] = raw.split('?');
+    return { route: path || fallback, query: Object.fromEntries(new URLSearchParams(search)) };
+  };
+  const [state, setState] = useState(read);
 
   useEffect(() => {
-    const onChange = () => setRoute(read());
+    const onChange = () => setState(read());
     window.addEventListener('hashchange', onChange);
     return () => window.removeEventListener('hashchange', onChange);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -21,7 +26,7 @@ export function useHashRoute(fallback = 'dashboard') {
     window.scrollTo({ top: 0 });
   }, []);
 
-  return [route, navigate];
+  return [state.route, navigate, state.query];
 }
 
 /** Fire-and-forget toasts — the panel's confirmation of a write. */

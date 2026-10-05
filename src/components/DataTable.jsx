@@ -23,6 +23,8 @@ export function DataTable({
   rows,
   searchKeys = [],
   searchPlaceholder = 'Search…',
+  /** Pre-filled search text — e.g. from a deep link. */
+  initialQuery = '',
   toolbar,
   toolbarEnd,
   onRowClick,
@@ -35,7 +37,7 @@ export function DataTable({
   error,
   onRetry,
 }) {
-  const [query, setQuery] = useState('');
+  const [query, setQuery] = useState(initialQuery);
   const [sort, setSort] = useState(null);
   const [page, setPage] = useState(1);
 

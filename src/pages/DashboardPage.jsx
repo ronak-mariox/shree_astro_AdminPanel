@@ -104,6 +104,45 @@ export function DashboardPage({ onNavigate }) {
           deltaTone: 'up',
           hint: 'collected this month',
         },
+        /** The store and puja counters arrive once the commerce API is live. */
+        ...(data.shop
+          ? [
+              {
+                key: 'ordersToday',
+                label: 'Orders Today',
+                value: count(data.shop.ordersToday),
+                icon: 'package',
+                tone: 'brand',
+                delta: shortMoney(data.shop.revenue30d),
+                deltaTone: 'up',
+                hint: 'store revenue, 30 days',
+              },
+              {
+                key: 'pendingOrders',
+                label: 'Pending Orders',
+                value: count(data.shop.pendingOrders),
+                icon: 'bag',
+                tone: 'yellow',
+                delta: 'to pack & ship',
+                deltaTone: 'flat',
+                hint: 'placed or packed',
+              },
+            ]
+          : []),
+        ...(data.pujas
+          ? [
+              {
+                key: 'pujaBookings',
+                label: 'Puja Bookings Today',
+                value: count(data.pujas.bookingsToday),
+                icon: 'flame',
+                tone: 'lilac',
+                delta: `${count(data.pujas.upcoming)} upcoming`,
+                deltaTone: 'flat',
+                hint: 'confirmed slots ahead',
+              },
+            ]
+          : []),
       ]
     : [];
 
@@ -135,7 +174,7 @@ export function DashboardPage({ onNavigate }) {
               ? Array.from({ length: 4 }, (_, index) => (
                   <StatCard key={index} label="Loading…" value="—" icon="activity" />
                 ))
-              : kpis.map((kpi) => <StatCard key={kpi.key} {...kpi} />)}
+              : kpis.map(({ key, ...kpi }) => <StatCard key={key} {...kpi} />)}
           </div>
 
           <div className="grid grid--sidebar" style={{ marginBottom: 16 }}>
@@ -163,7 +202,7 @@ export function DashboardPage({ onNavigate }) {
                     size="sm"
                     variant="quiet"
                     iconRight="chevronRight"
-                    onClick={() => onNavigate('astrologers')}
+                    onClick={() => onNavigate('wallets')}
                   >
                     Review
                   </Button>
@@ -184,7 +223,7 @@ export function DashboardPage({ onNavigate }) {
                     <span>
                       <strong>Payout requests</strong>
                       <span>
-                        {payable ? `${money(payable)} payable` : 'Nothing waiting right now'}
+                        {payable ? `${money(payable)} awaiting approval (Wallets)` : 'Nothing waiting right now'}
                       </span>
                     </span>
                   </li>
