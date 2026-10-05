@@ -118,6 +118,22 @@ const THIRD_PARTY_PROVIDERS = [
     ],
   },
   {
+    key: 'razorpay',
+    name: 'Razorpay',
+    icon: 'wallet',
+    subtitle: 'Payment gateway for wallet top-ups — use rzp_test_ keys for test mode, rzp_live_ keys to go live',
+    fields: [
+      { key: 'keyId', label: 'Key ID', placeholder: 'e.g., rzp_test_xxxxxxxxxxxxxx' },
+      { key: 'keySecret', label: 'Key Secret', placeholder: 'Enter the Razorpay key secret', secret: true },
+      {
+        key: 'webhookSecret',
+        label: 'Webhook Secret',
+        placeholder: 'The secret set on the webhook in Razorpay Dashboard → Settings → Webhooks',
+        secret: true,
+      },
+    ],
+  },
+  {
     key: 'firebase',
     name: 'Firebase',
     icon: 'zap',
