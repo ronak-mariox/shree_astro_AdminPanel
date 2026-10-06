@@ -4,7 +4,8 @@
  * without re-theming a third-party library.
  */
 
-import { useId } from 'react';
+import { useId, useLayoutEffect, useRef, useState } from 'react';
+import { useMediaQuery } from '../hooks/useMediaQuery';
 
 const PALETTE = ['#F55102', '#FFBC01', '#1F2937', '#16A34A', '#5B3FA8', '#9CA3AF'];
 
@@ -32,6 +33,37 @@ function smoothPath(points) {
   return path;
 }
 
+/**
+ * The drawing width in SVG units. Desktop keeps the fixed 640-unit canvas the
+ * charts were designed on (stretched to fit, as before). On a phone the SVG is
+ * drawn at its real pixel width instead, so axis text stays legible rather
+ * than being squeezed to a few pixels high.
+ */
+const BASE_WIDTH = 640;
+
+function useChartWidth() {
+  const ref = useRef(null);
+  const phone = useMediaQuery('(max-width: 720px)');
+  const [measured, setMeasured] = useState(null);
+
+  useLayoutEffect(() => {
+    if (!phone || !ref.current) return undefined;
+    const node = ref.current;
+    const observer = new ResizeObserver(([entry]) => {
+      const next = Math.round(entry.contentRect.width);
+      if (next > 0) setMeasured(next);
+    });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [phone]);
+
+  const width = phone && measured ? measured : BASE_WIDTH;
+  return [ref, width];
+}
+
+/** Every nth x-label, so labels sit at least ~44 units apart. */
+const labelEvery = (count, plotW) => Math.max(1, Math.ceil(count / Math.max(1, plotW / 44)));
+
 /* ————————————————————————————— Area chart */
 
 export function AreaChart({
@@ -42,7 +74,7 @@ export function AreaChart({
   fillFrom = 'rgba(245, 81, 2, 0.22)',
 }) {
   const gradientId = useId();
-  const width = 640;
+  const [ref, width] = useChartWidth();
   const pad = { top: 12, right: 8, bottom: 24, left: 40 };
   const plotW = width - pad.left - pad.right;
   const plotH = height - pad.top - pad.bottom;
@@ -56,9 +88,11 @@ export function AreaChart({
   const line = smoothPath(points);
   const area = `${line} L ${pad.left + plotW} ${pad.top + plotH} L ${pad.left} ${pad.top + plotH} Z`;
   const ticks = [0, 0.25, 0.5, 0.75, 1];
+  const every = width === BASE_WIDTH ? 1 : labelEvery(data.length, plotW);
 
   return (
     <svg
+      ref={ref}
       className="chart"
       viewBox={`0 0 ${width} ${height}`}
       preserveAspectRatio="none"
@@ -101,6 +135,7 @@ export function AreaChart({
         <text
           key={point.label}
           className="chart__axis"
+          display={index % every === 0 ? undefined : 'none'}
           x={pad.left + index * step}
           y={height - 6}
           textAnchor="middle"
@@ -115,7 +150,7 @@ export function AreaChart({
 /* ————————————————————————————— Bar chart */
 
 export function BarChart({ data, height = 200, valueFormat = (value) => value, stacked }) {
-  const width = 640;
+  const [ref, width] = useChartWidth();
   const pad = { top: 12, right: 8, bottom: 26, left: 44 };
   const plotW = width - pad.left - pad.right;
   const plotH = height - pad.top - pad.bottom;
@@ -126,9 +161,11 @@ export function BarChart({ data, height = 200, valueFormat = (value) => value, s
   const max = niceMax(Math.max(...totals));
   const slot = plotW / data.length;
   const barWidth = Math.min(30, slot * 0.52);
+  const every = width === BASE_WIDTH ? 1 : labelEvery(data.length, plotW);
 
   return (
     <svg
+      ref={ref}
       className="chart"
       viewBox={`0 0 ${width} ${height}`}
       preserveAspectRatio="none"
@@ -176,6 +213,7 @@ export function BarChart({ data, height = 200, valueFormat = (value) => value, s
             })}
             <text
               className="chart__axis"
+              display={index % every === 0 ? undefined : 'none'}
               x={x + barWidth / 2}
               y={height - 8}
               textAnchor="middle"

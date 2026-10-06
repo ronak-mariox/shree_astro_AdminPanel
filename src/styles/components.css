@@ -1265,3 +1265,210 @@
 @media (prefers-reduced-motion: reduce) {
   .spinner { animation-duration: 2s; }
 }
+
+/* ————————————————————————————————— Responsive */
+
+/* Laptop and below: a wide table keeps a usable width and scrolls inside its
+   own card (.table-wrap) rather than crushing its columns.
+   DataTable sets --table-min from its column count. */
+@media (max-width: 1180px) {
+  .table {
+    min-width: max(100%, var(--table-min, 0px));
+  }
+
+  /* Long names/emails truncate (Identity already ellipsises) instead of
+     starving the other columns. */
+  .table .identity {
+    max-width: 280px;
+  }
+
+  /* Phone numbers, ids and amounts read as one token. */
+  .table .mono,
+  .table td.num {
+    white-space: nowrap;
+  }
+}
+
+.pagination {
+  flex-wrap: wrap;
+}
+
+.pagination__pages {
+  flex-wrap: wrap;
+}
+
+.detail-list__value {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 720px) {
+  /* Cards keep a 16px gutter on phones. */
+  .card__head {
+    padding: 14px 16px;
+    flex-wrap: wrap;
+  }
+
+  .card__head > div:first-child {
+    min-width: 0;
+  }
+
+  .card__body {
+    padding: 16px;
+  }
+
+  .card__body--flush {
+    padding: 0;
+  }
+
+  .card__foot {
+    padding: 12px 16px;
+    flex-wrap: wrap;
+  }
+
+  .stat {
+    padding: 16px;
+  }
+
+  .stat__top > div {
+    min-width: 0;
+  }
+
+  .stat__foot {
+    flex-wrap: wrap;
+  }
+
+  .table-wrap {
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+  }
+
+  .table .identity {
+    max-width: 220px;
+  }
+
+  .table thead th,
+  .table tbody td {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+
+  .table .actions .btn--sm {
+    height: 40px;
+  }
+
+  .table .actions .btn--icon.btn--sm {
+    width: 40px;
+  }
+
+  .table-toolbar {
+    padding: 12px;
+    gap: 10px;
+  }
+
+  .table-toolbar .search {
+    flex: 1 1 100%;
+    min-width: 0;
+    max-width: none;
+  }
+
+  .table-toolbar > * {
+    max-width: 100%;
+  }
+
+  .pagination {
+    padding: 10px 12px;
+    justify-content: center;
+  }
+
+  .pagination__page {
+    min-width: 40px;
+    height: 40px;
+  }
+
+  /* Segmented tabs scroll inside themselves instead of widening the page. */
+  .tabs {
+    display: flex;
+    max-width: 100%;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  .tabs__tab {
+    flex: none;
+    white-space: nowrap;
+  }
+
+  .btn--icon,
+  .btn--icon.btn--sm {
+    width: 40px;
+    height: 40px;
+  }
+
+  .toggle-row {
+    align-items: flex-start;
+  }
+
+  .toggle-row > div:first-child {
+    min-width: 0;
+  }
+
+  /* Overlays fit the viewport with a 12px margin; bodies scroll internally. */
+  .modal-layer {
+    padding: 12px;
+  }
+
+  .modal,
+  .modal--wide {
+    width: min(560px, calc(100vw - 24px));
+    max-height: calc(100dvh - 24px);
+  }
+
+  .modal--wide {
+    width: min(760px, calc(100vw - 24px));
+  }
+
+  .drawer,
+  .drawer--wide {
+    width: 100vw;
+  }
+
+  .overlay__head {
+    padding: 14px 16px;
+  }
+
+  .overlay__head > div:first-child {
+    min-width: 0;
+  }
+
+  .overlay__body {
+    padding: 16px;
+  }
+
+  .overlay__foot {
+    padding: 12px 16px;
+  }
+
+  .overlay__foot > .btn {
+    flex: 1 1 auto;
+  }
+
+  .detail-list__row {
+    flex-wrap: wrap;
+    gap: 4px 12px;
+  }
+
+  .toasts {
+    left: 12px;
+    right: 12px;
+    bottom: 12px;
+  }
+
+  .toast {
+    min-width: 0;
+  }
+}

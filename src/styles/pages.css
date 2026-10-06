@@ -744,3 +744,85 @@
     width: 100%;
   }
 }
+
+/* ————————————————————————————————— Responsive (page pieces) */
+
+@media (max-width: 720px) {
+  .menu {
+    max-width: calc(100vw - 24px);
+  }
+
+  .menu__header strong,
+  .menu__header span {
+    display: block;
+    overflow-wrap: anywhere;
+  }
+
+  .menu__item {
+    min-height: 40px;
+  }
+
+  .split-preview {
+    flex-wrap: wrap;
+  }
+
+  .split-preview > .split-preview__divider {
+    display: none;
+  }
+
+  .split-preview > div {
+    flex: 1 1 140px;
+  }
+
+  .adjust-preview,
+  .availability-row,
+  .mini-row,
+  .profile-head {
+    flex-wrap: wrap;
+  }
+
+  .amount-hero__value {
+    font-size: 26px;
+    overflow-wrap: anywhere;
+  }
+
+  .party-grid {
+    grid-template-columns: repeat(auto-fit, minmax(min(190px, 100%), 1fr));
+  }
+
+  .transcript__line {
+    max-width: 92%;
+    overflow-wrap: anywhere;
+  }
+
+  .feed__row {
+    padding: 12px 16px;
+  }
+
+  .feed__row > span:not(.feed__icon),
+  .attention li > span:last-child {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .login__panel {
+    padding: 28px 16px;
+  }
+
+  .login__brand {
+    margin-bottom: 28px;
+  }
+
+  .login__head h1 {
+    font-size: 23px;
+  }
+
+  .otp {
+    gap: 6px;
+  }
+
+  .otp__box {
+    height: 48px;
+    font-size: 18px;
+  }
+}

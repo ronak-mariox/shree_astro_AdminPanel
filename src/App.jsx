@@ -10,6 +10,7 @@ import { Sidebar, Topbar } from './components/Shell';
 import { Toasts } from './components/ui';
 import { cx } from './utils/cx';
 import { useHashRoute, useToasts } from './hooks/useHashRoute';
+import { useMediaQuery } from './hooks/useMediaQuery';
 import { signOut as endSession } from './services/admin';
 import { getAdmin, isSignedIn, onSessionChange } from './services/session';
 import AstrologersPage from './pages/AstrologersPage';
@@ -61,6 +62,15 @@ export default function App() {
   /** Read from sessionStorage, so a page refresh does not sign the admin out. */
   const [admin, setAdmin] = useState(getAdmin);
   const [collapsed, setCollapsed] = useState(false);
+  /**
+   * At tablet/phone widths the sidebar is an off-canvas drawer instead of a
+   * column; the topbar toggle opens it there, and collapses the rail above.
+   * Collapsing is a desktop-only idea, so it is ignored while narrow.
+   */
+  const narrow = useMediaQuery('(max-width: 900px)');
+  const [navOpen, setNavOpen] = useState(false);
+  const drawerOpen = narrow && navOpen;
+  const railCollapsed = !narrow && collapsed;
   const [route, navigate, query] = useHashRoute('dashboard');
   const [toasts, notify] = useToasts();
   /** Bumped by the topbar's "Refresh data" button — folded into the current page's `key` below so React remounts it from scratch, same as switching routes does. */
@@ -72,6 +82,20 @@ export default function App() {
    * to be. Listening here turns that into navigation.
    */
   useEffect(() => onSessionChange((session) => setAdmin(session?.admin ?? null)), []);
+
+  /** While the nav drawer is open: Esc closes it and the page behind stops scrolling. */
+  useEffect(() => {
+    if (!drawerOpen) return undefined;
+    const onKey = (event) => {
+      if (event.key === 'Escape') setNavOpen(false);
+    };
+    document.addEventListener('keydown', onKey);
+    document.documentElement.classList.add('is-nav-locked');
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.documentElement.classList.remove('is-nav-locked');
+    };
+  }, [drawerOpen]);
 
   if (!admin || !isSignedIn()) {
     return <LoginPage onAuthenticated={setAdmin} />;
@@ -85,19 +109,31 @@ export default function App() {
   };
 
   return (
-    <div className={cx('shell', collapsed && 'is-collapsed')}>
+    <div className={cx('shell', railCollapsed && 'is-collapsed', drawerOpen && 'is-nav-open')}>
       <Sidebar
         route={route}
-        onNavigate={navigate}
-        collapsed={collapsed}
-        onSignOut={signOut}
+        onNavigate={(next) => {
+          setNavOpen(false);
+          navigate(next);
+        }}
+        collapsed={railCollapsed}
+        hidden={narrow && !navOpen}
+        onSignOut={() => {
+          setNavOpen(false);
+          signOut();
+        }}
       />
+      {drawerOpen && <div className="nav-scrim" onClick={() => setNavOpen(false)} />}
 
       <div className="main">
         <Topbar
           route={route}
-          collapsed={collapsed}
-          onToggle={() => setCollapsed((value) => !value)}
+          collapsed={railCollapsed}
+          narrow={narrow}
+          navOpen={drawerOpen}
+          onToggle={() =>
+            narrow ? setNavOpen((open) => !open) : setCollapsed((value) => !value)
+          }
           onNavigate={navigate}
           onSignOut={signOut}
           onRefresh={() => setRefreshTick((tick) => tick + 1)}
