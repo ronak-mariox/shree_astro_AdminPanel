@@ -100,7 +100,11 @@ export function DataTable({
       )}
 
       <div className="table-wrap">
-        <table className={cx('table', dense && 'table--dense')}>
+        {/* --table-min: how wide the table stays on a phone before it scrolls inside the card. */}
+        <table
+          className={cx('table', dense && 'table--dense')}
+          style={{ '--table-min': `${Math.max(320, columns.length * 130)}px` }}
+        >
           <thead>
             <tr>
               {columns.map((column) => (

@@ -449,16 +449,173 @@
   .grid--sidebar {
     grid-template-columns: minmax(0, 1fr);
   }
+
+  /* The crumb trail stays on one line; the page title truncates if it must. */
+  .topbar__crumbs-group,
+  .topbar__crumbs-sep {
+    flex: none;
+    white-space: nowrap;
+  }
+
+  .topbar__crumbs strong {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 }
 
+.topbar__user-text {
+  display: block;
+  text-align: left;
+}
+
+.topbar__user-name,
+.topbar__user-role {
+  display: block;
+}
+
+
+/* The phone/tablet drawer's backdrop — only rendered while it is open. */
+.nav-scrim {
+  display: none;
+}
+
+/* — Tablet & phone (≤ 900px): the sidebar becomes an off-canvas drawer ——— */
 @media (max-width: 900px) {
-  .shell {
-    grid-template-columns: var(--sidebar-w-collapsed) minmax(0, 1fr);
+  .shell,
+  .shell.is-collapsed {
+    grid-template-columns: minmax(0, 1fr);
   }
+
+  .sidebar {
+    position: fixed;
+    z-index: 50;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    height: 100vh;
+    height: 100dvh;
+    width: min(var(--sidebar-w) + 26px, 86vw);
+    transform: translateX(-100%);
+    visibility: hidden;
+    transition: transform 240ms var(--ease), visibility 0s linear 240ms;
+    box-shadow: none;
+  }
+
+  .is-nav-open .sidebar {
+    transform: none;
+    visibility: visible;
+    transition: transform 240ms var(--ease), visibility 0s;
+    box-shadow: var(--shadow-pop);
+  }
+
+  .nav-scrim {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 49;
+    background: rgba(17, 17, 17, 0.44);
+    backdrop-filter: blur(2px);
+    animation: fade-in 160ms var(--ease);
+  }
+
+  .nav-item,
+  .sidebar__signout {
+    min-height: 44px;
+  }
+
+  .topbar {
+    gap: var(--s-3);
+    padding: 0 var(--s-4);
+  }
+
   .topbar__search {
     display: none;
   }
+
+  .topbar__toggle,
+  .topbar .icon-button {
+    width: 40px;
+    height: 40px;
+  }
+
   .page {
     padding: var(--s-4) var(--s-4) var(--s-8);
+  }
+
+  .grid--stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* Locks the page behind the open nav drawer (set on <html> by App.jsx). */
+.is-nav-locked,
+.is-nav-locked body {
+  overflow: hidden;
+}
+
+/* — Phone (≤ 720px) ———————————————————————————— */
+@media (max-width: 720px) {
+  .topbar {
+    gap: 10px;
+    padding: 0 12px;
+  }
+
+  .topbar__crumbs-group,
+  .topbar__crumbs-sep {
+    display: none;
+  }
+
+  .topbar__crumbs strong {
+    font-size: 14px;
+  }
+
+  .topbar__actions {
+    gap: 8px;
+  }
+
+  .topbar__user {
+    padding: 0;
+    border: none;
+    background: none;
+    border-radius: var(--r-field);
+  }
+
+  .topbar__user .avatar {
+    width: 40px;
+    height: 40px;
+    font-size: 13px;
+    border-radius: var(--r-field);
+  }
+
+  .topbar__user-text,
+  .topbar__user-caret {
+    display: none;
+  }
+
+  .page-head {
+    align-items: flex-start;
+  }
+
+  .page-head h1 {
+    font-size: 20px;
+  }
+
+  .page-head > div:first-child {
+    min-width: 0;
+  }
+}
+
+@media (max-width: 560px) {
+  .grid--stats {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 720px) {
+  /* Heading-plus-controls rows (title on the left, chips/buttons on the right) wrap. */
+  .row--between {
+    flex-wrap: wrap;
   }
 }

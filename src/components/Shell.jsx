@@ -17,9 +17,10 @@ const ROLE_LABELS = {
   user_manager: 'User Manager',
 };
 
-export function Sidebar({ route, onNavigate, collapsed, onSignOut }) {
+export function Sidebar({ route, onNavigate, collapsed, hidden, onSignOut }) {
   return (
-    <aside className="sidebar">
+    /* `inert` while the phone drawer is shut, so its links are not tabbable off-screen. */
+    <aside className="sidebar" id="admin-nav" inert={hidden || undefined}>
       <div className="sidebar__brand">
         <span className="sidebar__mark">
           <BrandMark size={19} />
@@ -74,7 +75,17 @@ export function Sidebar({ route, onNavigate, collapsed, onSignOut }) {
   );
 }
 
-export function Topbar({ route, collapsed, onToggle, onNavigate, onSignOut, onRefresh, admin }) {
+export function Topbar({
+  route,
+  collapsed,
+  narrow,
+  navOpen,
+  onToggle,
+  onNavigate,
+  onSignOut,
+  onRefresh,
+  admin,
+}) {
   const [menuOpen, setMenuOpen] = useState(false);
   const crumb = routeTitles[route] || routeTitles.dashboard;
 
@@ -84,14 +95,24 @@ export function Topbar({ route, collapsed, onToggle, onNavigate, onSignOut, onRe
         type="button"
         className="topbar__toggle"
         onClick={onToggle}
-        aria-label={collapsed ? 'Expand navigation' : 'Collapse navigation'}
+        aria-controls="admin-nav"
+        aria-expanded={narrow ? navOpen : !collapsed}
+        aria-label={
+          narrow
+            ? navOpen
+              ? 'Close navigation'
+              : 'Open navigation'
+            : collapsed
+              ? 'Expand navigation'
+              : 'Collapse navigation'
+        }
       >
         <Icon name="menu" size={17} />
       </button>
 
       <div className="topbar__crumbs">
-        <span>{crumb.group}</span>
-        <Icon name="chevronRight" size={12} />
+        <span className="topbar__crumbs-group">{crumb.group}</span>
+        <Icon name="chevronRight" size={12} className="topbar__crumbs-sep" />
         <strong>{crumb.title}</strong>
       </div>
 
@@ -120,15 +141,13 @@ export function Topbar({ route, collapsed, onToggle, onNavigate, onSignOut, onRe
             aria-expanded={menuOpen}
           >
             <Avatar name={admin?.name} size="sm" />
-            <span style={{ textAlign: 'left' }}>
-              <span className="topbar__user-name" style={{ display: 'block' }}>
-                {admin?.name}
-              </span>
-              <span className="topbar__user-role" style={{ display: 'block' }}>
+            <span className="topbar__user-text">
+              <span className="topbar__user-name">{admin?.name}</span>
+              <span className="topbar__user-role">
                 {ROLE_LABELS[admin?.role] || admin?.role}
               </span>
             </span>
-            <Icon name="chevronDown" size={14} />
+            <Icon name="chevronDown" size={14} className="topbar__user-caret" />
           </button>
 
           {menuOpen && (
