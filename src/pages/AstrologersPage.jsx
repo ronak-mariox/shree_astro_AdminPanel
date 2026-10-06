@@ -78,8 +78,49 @@ const FILTERS = [
 
 const REVIEW_TONE = { approved: 'success', pending: 'warning', rejected: 'danger' };
 
-/** Opening rates, offered when approving an application. */
+/** Used only for a rate the astrologer has not set themselves yet. */
 const BLANK_APPROVAL = { chatRate: '20', callRate: '30', commission: '25' };
+
+/**
+ * The approval popup, filled with what the astrologer set from their app — their
+ * own chat and call rates (the base rate, before any offer) and the commission on
+ * their record. `own` keeps those originals: approving without touching the rates
+ * leaves the astrologer's services exactly as they set them (offer, on/off).
+ */
+const approvalFor = ({ id, name, chatRate, callRate, commission }) => {
+  const known = (value) => (value === undefined || value === null || value === '' ? undefined : Number(value));
+  const own = { chat: known(chatRate), call: known(callRate) };
+  return {
+    id,
+    name,
+    chatRate: own.chat !== undefined ? String(own.chat) : BLANK_APPROVAL.chatRate,
+    callRate: own.call !== undefined ? String(own.call) : BLANK_APPROVAL.callRate,
+    commission: known(commission) !== undefined ? String(commission) : BLANK_APPROVAL.commission,
+    own,
+  };
+};
+
+/** From a list row: `rates.*.was` is the rate the astrologer set (`now` is after an offer). */
+const approvalFromRow = (row) =>
+  approvalFor({
+    id: row.id,
+    name: row.name,
+    chatRate: row.rates?.chat?.was,
+    callRate: row.rates?.call?.was,
+    commission: row.commissionPercent,
+  });
+
+/** From the open detail panel: the astrologer's own services. */
+const approvalFromDetail = (astrologer) => {
+  const rateOf = (type) => astrologer.services?.find((service) => service.type === type)?.ratePerMinute;
+  return approvalFor({
+    id: astrologer._id,
+    name: astrologer.name,
+    chatRate: rateOf('chat'),
+    callRate: rateOf('call'),
+    commission: astrologer.commissionPercent,
+  });
+};
 
 /** Both rates must be real money and the commission a real percentage — an astrologer cannot take work priced at ₹0/negative, or split earnings outside 0–100%. */
 const isApprovalValid = (approval) =>
@@ -131,14 +172,20 @@ export function AstrologersPage({ notify }) {
       () =>
         approveAstrologer(approval.id, {
           commissionPercent: Number(approval.commission),
-          services: [
-            {
-              type: 'chat',
-              ratePerMinute: Number(approval.chatRate),
-              isEnabled: true,
-            },
-            { type: 'call', ratePerMinute: Number(approval.callRate), isEnabled: true },
-          ],
+          /**
+           * Only when the admin changed a rate, or the astrologer had not set one:
+           * otherwise the server keeps the services exactly as the astrologer set
+           * them (their offer and which services are on).
+           */
+          ...(approval.own.chat === Number(approval.chatRate) &&
+          approval.own.call === Number(approval.callRate)
+            ? {}
+            : {
+                services: [
+                  { type: 'chat', ratePerMinute: Number(approval.chatRate), isEnabled: true },
+                  { type: 'call', ratePerMinute: Number(approval.callRate), isEnabled: true },
+                ],
+              }),
         }),
       {
         success: `${approval.name} approved and published`,
@@ -240,7 +287,7 @@ export function AstrologersPage({ notify }) {
                           label: 'Approve',
                           icon: 'check',
                           variant: 'success',
-                          onClick: () => setApproval({ ...BLANK_APPROVAL, id: row.id, name: row.name }),
+                          onClick: () => setApproval(approvalFromRow(row)),
                         },
                         { label: 'Reject', icon: 'x', variant: 'danger', onClick: () => setRejecting(row) },
                       ]
@@ -355,7 +402,7 @@ export function AstrologersPage({ notify }) {
                   <Button
                     variant="primary"
                     icon="check"
-                    onClick={() => setApproval({ ...BLANK_APPROVAL, id: open._id, name: open.name })}
+                    onClick={() => setApproval(approvalFromDetail(open))}
                   >
                     Approve &amp; publish
                   </Button>
@@ -669,8 +716,9 @@ export function AstrologersPage({ notify }) {
         >
           <div className="stack" style={{ gap: 16 }}>
             <Note tone="info" icon="info">
-              An astrologer cannot take work without a rate, so their opening rates are set
-              here. Any change after this has to be requested by them and approved by you.
+              {approval.own.chat !== undefined && approval.own.call !== undefined
+                ? 'These are the rates the astrologer set in their app. Change them only if needed; any change after approval has to be requested by them and approved by you.'
+                : 'The astrologer has not set every rate yet, so the missing one starts from a default here. Any change after approval has to be requested by them and approved by you.'}
             </Note>
 
             <div className="grid grid--2" style={{ gap: 14 }}>
